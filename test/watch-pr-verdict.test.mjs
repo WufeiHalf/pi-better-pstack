@@ -407,3 +407,52 @@ test("workflow triggers decide whether a push must start a run", () => {
   assert.equal(unreadable.code, 9);
   assert.equal(unreadable.lines[0], "UNKNOWN: cannot read the triggers of ci.yml");
 });
+
+// A watcher started right after a push can read GitHub before the pull request
+// reports the new head, and would judge the previous commit's checks.
+test("--sha waits for the pushed commit before evaluating anything", () => {
+  const stale = {
+    pullRequest: open({ headRefOid: OLD }),
+    checkRuns: [check(DURABLE, "failure"), check(CURSOR, "success")],
+  };
+  const landed = { pullRequest: open(), checkRuns: reviewersPassed() };
+
+  // The previous head's failed check is never judged; the verdict is about the requested commit.
+  const waited = watch([stale, landed], { args: ["--sha", HEAD.slice(0, 7), "--interval", "0.05"] });
+  assert.equal(waited.code, 0);
+  assert.deepEqual(waited.lines.slice(0, 1).map((line) => line.replace(/^\S+ /, "")), [
+    `waiting for the head to reach ${HEAD.slice(0, 7)}: now ${OLD.slice(0, 7)}`,
+  ]);
+  assert.deepEqual(verdict(waited).slice(0, 3), [
+    "READY",
+    "pr: https://github.com/fitchmultz/pi/pull/418",
+    `commit: ${HEAD} (head did not move during this watch)`,
+  ]);
+
+  // A head that does not reach the commit is waited for under the watch's own timeout.
+  const stuck = watch([stale], { args: ["--sha", HEAD, "--interval", "0.05", "--timeout", "0.3"] });
+  assert.equal(stuck.code, 5);
+  assert.equal(verdict(stuck)[0], `BLOCKED: timed out after 0.3 s; waiting for: the head to reach ${HEAD.slice(0, 7)}`);
+
+  // --once takes one look: the head simply has not reached the commit yet.
+  const glance = watch([stale], { args: ["--sha", HEAD, "--once"] });
+  assert.equal(glance.code, 5);
+  assert.equal(glance.lines[0], `BLOCKED: not ready; waiting for: the head to reach ${HEAD.slice(0, 7)}`);
+
+  // A successful wait between failed reads resets the retry budget, so the failures are not "in a row".
+  const fail502 = { fail: { stderr: "gh: HTTP 502: Bad Gateway" } };
+  const recovered = watch([fail502, fail502, fail502, fail502, stale, fail502, landed], {
+    args: ["--sha", HEAD.slice(0, 7), "--interval", "0.05"],
+  });
+  assert.equal(recovered.code, 0);
+  assert.deepEqual(recovered.lines.map((line) => line.replace(/^\S+ /, "")).slice(0, 6), [
+    "retry 1/5: gh-personal api graphql exited 1: gh: HTTP 502: Bad Gateway",
+    "retry 2/5: gh-personal api graphql exited 1: gh: HTTP 502: Bad Gateway",
+    "retry 3/5: gh-personal api graphql exited 1: gh: HTTP 502: Bad Gateway",
+    "retry 4/5: gh-personal api graphql exited 1: gh: HTTP 502: Bad Gateway",
+    `waiting for the head to reach ${HEAD.slice(0, 7)}: now ${OLD.slice(0, 7)}`,
+    "retry 1/5: gh-personal api graphql exited 1: gh: HTTP 502: Bad Gateway",
+  ]);
+
+  assert.equal(watch([{ pullRequest: open() }], { args: ["--sha", "zzzzzzz"] }).code, 64);
+});

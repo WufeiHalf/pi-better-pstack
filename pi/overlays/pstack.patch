@@ -3461,10 +3461,10 @@ index 97f5b6412148fa5b2a2fe478836fe8923ffa5cbb..d99835d19c61f673dac22bc41548128d
  ## Patterns to detect and fix
 diff --git a/skills/watch-pr/SKILL.md b/skills/watch-pr/SKILL.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..464aac983444a784b7ccdd2ca068f8ff7e702fe9
+index 0000000000000000000000000000000000000000..f0886ceacd7ba5f6050295e7300786887b8a3d8e
 --- /dev/null
 +++ b/skills/watch-pr/SKILL.md
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,90 @@
 +---
 +name: watch-pr
 +description: "Wait for a GitHub PR's checks, reviews, or merge readiness with one background watcher, not a hand-written loop."
@@ -3490,6 +3490,7 @@ index 0000000000000000000000000000000000000000..464aac983444a784b7ccdd2ca068f8ff
 +- `--timeout SECONDS` ends the watch after that time. The default is 3600. `0` waits without limit.
 +- `--interval SECONDS` is the time between reads. The default is 60.
 +- `--once` prints the verdict for the current state and exits. Run it with `bash` to look without waiting.
++- `--sha SHA`, full or short, evaluates nothing until GitHub reports that commit as the head. Pass `--sha $(git rev-parse HEAD)` right after `git push`: GitHub can answer the first read with the previous head, and without `--sha` the watcher would judge that older commit's checks and threads. The wait shares the watch's `--timeout` and `--interval`; `--once` reports it without waiting.
 +- Without `background_command`, run the watcher with `bash` and a `--timeout` below the `bash` time limit.
 +- Start one job for each pull request.
 +
@@ -3517,7 +3518,7 @@ index 0000000000000000000000000000000000000000..464aac983444a784b7ccdd2ca068f8ff
 +| 2 | `BLOCKED: merge conflicts ...` | Resolve the conflicts. |
 +| 3 | `BLOCKED: N unresolved review threads` | Fix or rebut each thread, then resolve it. |
 +| 4 | `BLOCKED: N checks failed` | The block links each failed check. |
-+| 5 | `BLOCKED: timed out ...` or `BLOCKED: not ready ...` | Something is still running or has not started. The line says what. |
++| 5 | `BLOCKED: timed out ...` or `BLOCKED: not ready ...` | Something is still running, has not started, or the head has not reached the commit named by `--sha`. The line says what. |
 +| 6 | `BLOCKED: ...` | Draft, closed, changes requested, behind the base branch, or GitHub requires an approving review. |
 +| 7 | `BLOCKED: GitHub query failed ...` | The watcher could not read GitHub. The block names the GitHub CLI it ran. |
 +| 8 | `BLOCKED: NAME did not sign off ...` | A required reviewer reported on this commit and did not pass. |
@@ -4529,10 +4530,10 @@ index 0000000000000000000000000000000000000000..f7d1a90bcd76039ba305f0522d10daa0
 +}
 diff --git a/skills/watch-pr/scripts/watch-pr.mjs b/skills/watch-pr/scripts/watch-pr.mjs
 new file mode 100755
-index 0000000000000000000000000000000000000000..9695683f2f2b5a13f98e91b56f7a5d4c2ed1bd43
+index 0000000000000000000000000000000000000000..91ade2fa15e3680ed8ffaf357c32f0cffc4668ce
 --- /dev/null
 +++ b/skills/watch-pr/scripts/watch-pr.mjs
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,219 @@
 +#!/usr/bin/env node
 +// Waits until one pull request is ready to merge or blocked, then prints a
 +// short verdict as the last output. See ../SKILL.md for the verdict and exit codes.
@@ -4544,7 +4545,7 @@ index 0000000000000000000000000000000000000000..9695683f2f2b5a13f98e91b56f7a5d4c
 +import { QueryError, createGitHub } from "./github.mjs";
 +import { EXIT, assess, expectedChecks, render, reviewerStates, stillWaiting } from "./verdict.mjs";
 +
-+const USAGE = `Usage: watch-pr.mjs <number|url> [--repo OWNER/NAME] [--timeout SECONDS] [--interval SECONDS] [--once]
++const USAGE = `Usage: watch-pr.mjs <number|url> [--repo OWNER/NAME] [--timeout SECONDS] [--interval SECONDS] [--sha SHA] [--once]
 +
 +Waits until the pull request is ready to merge or blocked. The last output is the verdict.
 +
@@ -4552,11 +4553,13 @@ index 0000000000000000000000000000000000000000..9695683f2f2b5a13f98e91b56f7a5d4c
 +  --repo         OWNER/NAME; default: the origin remote (also --owner OWNER --repo NAME)
 +  --timeout      give up after this many seconds; default 3600, 0 waits without limit
 +  --interval     seconds between polls; default 60
++  --sha          evaluate only once the pull request head is this commit, full or short
 +  --once         print the verdict for the current state and exit
 +
 +Exit: 0 ready or merged, 2 merge conflicts, 3 unresolved review threads, 4 failed checks,
-+5 still waiting (timeout or --once), 6 draft, closed, changes requested, approval required or behind base,
-+7 GitHub query failed, 8 a required reviewer did not sign off, 9 unknown, 64 usage.
++5 still waiting (timeout, --once, or a head that has not reached --sha), 6 draft, closed,
++changes requested, approval required or behind base, 7 GitHub query failed, 8 a required
++reviewer did not sign off, 9 unknown, 64 usage.
 +`;
 +
 +// Consecutive failed polls before the watch gives up; the packaged poteto-mode watcher uses the same budget.
@@ -4590,6 +4593,7 @@ index 0000000000000000000000000000000000000000..9695683f2f2b5a13f98e91b56f7a5d4c
 +        pr: { type: "string" },
 +        timeout: { type: "string", default: "3600" },
 +        interval: { type: "string", default: "60" },
++        sha: { type: "string" },
 +        once: { type: "boolean", default: false },
 +        help: { type: "boolean", short: "h", default: false },
 +      },
@@ -4616,10 +4620,15 @@ index 0000000000000000000000000000000000000000..9695683f2f2b5a13f98e91b56f7a5d4c
 +    repo ??= origin?.[2];
 +  }
 +  if (!owner || !repo) throw new UsageError("name the repository: --repo OWNER/NAME");
++  const sha = values.sha?.toLowerCase();
++  if (sha !== undefined && !/^[0-9a-f]{7,40}$/.test(sha)) {
++    throw new UsageError(`--sha must be the 7 to 40 hex digits of a commit, not: ${values.sha}`);
++  }
 +  return {
 +    pr: { owner, repo, number: Number(number) },
 +    timeout: seconds("timeout", values.timeout, { zero: true }),
 +    interval: seconds("interval", values.interval, { zero: false }),
++    sha,
 +    once: values.once,
 +  };
 +}
@@ -4630,7 +4639,7 @@ index 0000000000000000000000000000000000000000..9695683f2f2b5a13f98e91b56f7a5d4c
 +    process.stdout.write(USAGE);
 +    return 0;
 +  }
-+  const { pr, timeout, interval, once } = options;
++  const { pr, timeout, interval, sha, once } = options;
 +  const settingsPath = configPath(env);
 +  const settings = settingsFor(loadConfig(settingsPath), pr.owner, pr.repo);
 +  const executable = env.WATCH_PR_GH || settings.gh || "gh";
@@ -4645,6 +4654,10 @@ index 0000000000000000000000000000000000000000..9695683f2f2b5a13f98e91b56f7a5d4c
 +    return cache.get(key);
 +  };
 +  let startHead = null;
++  // With --sha, GitHub can still report the head before the push for a few
++  // seconds; nothing is judged until the requested commit is the head.
++  let headReached = sha === undefined;
++  const shortSha = sha === undefined ? "" : sha.slice(0, 7);
 +
 +  async function observe() {
 +    const facts = await github.pullRequest(pr);
@@ -4653,6 +4666,10 @@ index 0000000000000000000000000000000000000000..9695683f2f2b5a13f98e91b56f7a5d4c
 +      facts, checks: [], expected: empty, reviewers: [],
 +    };
 +    if (facts.state !== "OPEN") return view;
++    if (!headReached) {
++      if (facts.head.startsWith(sha)) headReached = true;
++      else return { ...view, waitingForHead: true };
++    }
 +    view.startHead = startHead ??= facts.head;
 +    const [{ checks, runs }, files, required, texts] = await Promise.all([
 +      github.commitChecks(pr, facts.head),
@@ -4679,6 +4696,21 @@ index 0000000000000000000000000000000000000000..9695683f2f2b5a13f98e91b56f7a5d4c
 +    let outcome;
 +    try {
 +      view = await observe();
++      if (view.waitingForHead) {
++        if (once || timedOut()) {
++          process.stdout.write([
++            `BLOCKED: ${once ? "not ready" : `timed out after ${timeout} s`}; waiting for: the head to reach ${shortSha}`,
++            `pr: ${view.facts.url}`,
++          ].join("\n").concat("\n"));
++          return EXIT.timeout;
++        }
++        const line = `waiting for the head to reach ${shortSha}: now ${view.facts.head.slice(0, 7)}`;
++        if (line !== progress) log(line);
++        progress = line;
++        failures = 0;
++        await sleep();
++        continue;
++      }
 +      outcome = assess(view, { firstLook: !once && !seen.has(view.facts.head) });
 +      // A push during the reads would make READY describe a commit that is no longer the head.
 +      if (outcome.kind === "ready" && (await github.head(pr)) !== view.facts.head) continue;
