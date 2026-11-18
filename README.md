@@ -1,118 +1,53 @@
-# pi-pstack
+# pi-better-pstack
 
-Pi package adapter for [Cursor's `pstack`](https://github.com/cursor/plugins/tree/main/pstack) by Lauren Tan (`poteto`).
+cursor 官方 [pstack](https://github.com/cursor/plugins) 在 Pi 上的发行包。目标是与 Claude Code 侧完全同一份技能文本，外加一层经过实测验证的强制机制，让模型真的照着 poteto-mode 走。
 
-## What this package provides
+## 与上游的关系
 
-- **All 58 core `pstack` skills** (`./skills`), including `/skill:poteto-mode` (23 playbooks), all 24 `principle-*` skills, `/skill:how`, `/skill:why`, `/skill:architect`, `/skill:arena`, `/skill:swarm`, `/skill:interrogate`, `/skill:tdd`, `/skill:bro`, `/skill:unslop`, `/skill:no-comments`, `/skill:ketchup`, `/skill:recall`, `/skill:reflect`, `/skill:correct`, `/skill:teach`, `/skill:sharpen`, `/skill:in-your-own-words`, `/skill:figure-it-out`, `/skill:show-me-your-work`, `/skill:technical-writing`, `/skill:typescript-best-practices`, `/skill:benchmark-checklist`, `/skill:blast-radius`, `/skill:create-verification-skill`, `/skill:maintain-verification-skill`, `/skill:create-formal-verification-skill`, `/skill:maintain-formal-verification-skill`, `/skill:automate-me`, and `/skill:setup-pstack`. The package adds one Pi-owned skill, `/skill:watch-pr`. The principles and the command-only skills (`automate-me`, `in-your-own-words`, `ketchup-video`, `maintain-verification-skill`, `poteto-help`, `reflect`, and `setup-pstack`) stay out of the model's skill list; run them with `/skill:<name>` or through another skill's link.
-- **Optional delegation profiles** (`./agents`): `poteto-agent` and `comment-sicko`. The profile-based `pi-subagents` npm package discovers them through `pi.subagents.agents` in the manifest. The top-level `subagents.agents` alias is retained for older adapters; native Pi does not consume either profile-metadata key. `@fitchmultz/pi-subagents` does not read profiles: its `delegate` tool takes the complete assignment, so include a profile's instructions or readable path as [`docs/harness/pi.md`](./docs/harness/pi.md) describes. No sibling's generic profiles are assumed or copied.
-- **Pi harness adapter** ([`docs/harness/pi.md`](./docs/harness/pi.md)): defines task scope, workflow selection, native tool/path mappings, capability checks, standalone code cleanup, model inheritance, and `ponytail:` / `AGENTS.md` protections. Ordinary changes do not require architecture competitions or new tools. Explicit workflows preserve their checks and artifacts, with inline work labeled when an independent panel is unavailable.
-- **Automated upstream sync & notifications**:
-  - `.github/workflows/sync-upstream.yml` polls `cursor/plugins` (`pstack/`) every 6 hours. It validates a candidate without write credentials, then opens a PR for review instead of pushing to `main`. Conflicts or failed checks open an issue.
-  - Pi's built-in interactive startup package checker detects new commits on `fitchmultz/pi-pstack` and displays the native `Package Updates Available` banner (`pi update --extensions`).
-  - `extensions/index.js` also performs a non-blocking, cached (6h TTL) check against `cursor/plugins/pstack` on interactive startup and provides `/pstack-status` so upstream commits are surfaced even between scheduled sync runs. These notices distinguish upstream changes awaiting a reviewed sync from installable fork updates reported by Pi.
+`skills/`、`agents/`、`LICENSE`、`plugin.json` 是 cursor/plugins/pstack 的逐字节镜像（链接改写除外：指向未发布上游路径的相对链接会改写为 pinned GitHub 绝对链接）。上游没有任何 Pi 适配补丁，因此 Claude Code 侧怎么写，这里就是什么。同步机制保留上游溯源（`upstream.json` + `vendor/pstack`），每 6 小时 CI 轮询上游，有变化就开一个可评审的 sync PR。
 
-## Install
+## 强制层（全部在扩展里，技能文本零改动）
 
-Requires Node `^24.22.3 || >=26.13.1`, including the [November 2026 security fixes](https://nodejs.org/en/blog/vulnerability/november-2026-security-releases). CI uses the latest Node 24 patch.
+装好后 `/pstack-mode on`，效果是三层：
 
-```bash
-pi install git:github.com/fitchmultz/pi-pstack
+1. **系统提示注入。** 每次 agent start 把 poteto-mode 全文加 `docs/harness/pi.md`（Pi 执行契约）注入系统提示，压缩不会丢。契约用操作指令写：playbook 第一步打开、逐字 checklist、`Agent` 工具委派、别名解析。
+2. **每轮 sticky 提醒。** 每条用户消息附带一条简短的 checklist 提醒，落进会话记录、可审计。
+3. **模型预设。** `fable`、`opus`、`sonnet`、`haiku` 注册为 Pi 虚拟模型，技能原文里的 `model: sonnet` 逐字生效。
+
+## 模型预设配置
+
+在 `~/.pi/agent/pstack-models.md` 里配置，一行一个：
+
+```
+fable: magpie/tokenhub/glm-5.3 @high
+opus: magpie/tokenhub/glm-5.3 @high
+sonnet: magpie/tokenhub/glm-5.3-flash @high
+haiku: magpie/tokenhub/deepseek-v4.1-flash @low
 ```
 
-The supported hosts are the latest official Pi release and the current `fitchmultz/pi` fork revision. Older Pi releases and other forks are not compatibility targets; the exact tested revisions are listed under [Maintenance](#exact-hosts-and-the-configured-provider).
+格式：`alias: provider/modelId @level`。技能与上游一样按角色引用别名（feature/refactoring → `sonnet`，bug-fix/perf/hillclimb/judgment → `opus`，strongest judgment → `fable`）。effort 调整透传给物理模型。未配置的别名走 inherit-parent。改配置后重启会话生效。
 
-## Standalone use and optional integrations
+## 委派
 
-The package loads by itself on official Pi and the Pi fork. Inline skills such as `unslop`, `tdd`, the principles, and the style portion of `poteto-mode` need no other extension.
+不自带 subagent 体系。委派走宿主已有的 subagent 工具（推荐 tintinweb/pi-subagents 系的 `Agent` 工具），本包通过 `pi.subagents.agents` manifest 暴露上游的 `poteto-agent` 和 `comment-sicko` 档案，subagent_type 用裸名。也不自带 loop，调度用 Pi 自己的 schedule 能力。
 
-Use `/pstack-mode` to open Pi's mode picker, or `/pstack-mode on|off|status` directly with argument completion. An enabled mode appears in Pi's status area. The setting applies to the current session branch. Saved sessions restore the setting on resume and when navigating the session tree. The mode uses proportional planning, plain explanations, and verification of the actual outcome. Routine work does not require principle citations, skip ledgers, or delegation disclaimers. Explicit review and multi-model workflows still report what actually ran. This mode does not supply delegation or waive prerequisites; `/skill:poteto-mode` remains available for a one-time invocation.
+## 命令
 
-The bundled workflows and playbooks can use authorized delegates or run inline. Inline work preserves the checks and artifacts but is not an independent or parallel panel. Direct invocations and nested skill reads follow the same execution contract. Pi advertises 28 skills to the model; the 24 principles and the seven command-only skills remain directly invocable.
+- `/pstack-mode on|off|status`：模式开关，随会话分支保存。
+- `/pstack-status`：对照 cursor/plugins/pstack 上游检查本包新鲜度。
+- `/skill:poteto-mode` 等技能命令由 Pi 原生发现。
 
-With the profile-based `pi-subagents` npm package, discover its advertised `subagents_enable` loader and profiles before delegating. With `@fitchmultz/pi-subagents`, use its actual `delegate` and run-control tools. Availability does not prove permission, completion, or model diversity.
+## 已知取舍
 
-Delegated workers, reviewers, candidates, judges, and continuations run in the background. Launch independent work together, continue the main task, and use completion notifications rather than polling. If the next step needs a pending result, end the turn without claiming the task is complete. Both bundled profiles select background execution. Provider-specific launch, resume, and cancellation behavior is described in [Keep the main agent responsive](./docs/harness/pi.md#keep-the-main-agent-responsive).
+- `poteto-mode` 的 worktree-audit 脚本按上游只搜 Cursor transcripts，不搜 Pi 会话。
+- `watch-pr` 等 Pi 专有技能不再随包发布，保持镜像纯净。
 
-Optional providers include `pi-subagents` for delegation, `pi-ask-question` for dialogs, `pi-posthorse` for notes/history, `pi-agent-skills` for additional cleanup/browser guidance, `macuse` for native app driving, and the Pi fork's `background_command` for detached finite watchers. Use only available tools and their actual schemas. Ordinary questions, task-owned files, native shell commands, and repository-owned verification drivers cover their corresponding standalone cases. A missing required live driver or scheduler remains a real gap.
+## 开发
 
-Use Pi's visible tools and advertised discovery to find capabilities. The package exposes `pstack_opinion` to ask a configured `provider/model` for a text-only opinion on supplied material. It is a deferred tool: load it with Pi's `tool_search` before the first call. pstack activates `tool_search` when a session starts or moves to another tree branch, unless that branch recorded turning it off. When neither `tool_search` nor `codemode` is active, the tool cannot be called. pstack checks as each run starts, after every extension's session start handling, and warns once. An opinion has no tools or independent access to the repository and is not a substitute for delegated work or verification.
-
-`pstack_opinion` accepts an optional `reasoning` field for that request, without changing global settings. For example, pass `model: "provider/model-id"` and `reasoning: "max"` as separate fields, not `model: "provider/model-id:max"`.
-
-In persistent sessions on the Pi fork, `pstack_opinion` returns a background receipt immediately. Continue independent work while Pi waits for the model. Pi delivers the answer or error automatically and records its usage once. A receipt is not a completed opinion.
-
-Delivered opinions use a bounded card preview. Ctrl+O expands the full answer, and the Pi fork's compact view uses two rows. The complete opinion stays in the session. See [Opinion model contract](./docs/opinion-model-contract.md) for the enforced limits, prompt-only instructions, source references, and recommendations.
-
-Call the tool directly for background work. To await the answer, pass `background: false`; nested callers such as `codemode` must use that option and own background execution themselves. Official Pi and one-shot print/JSON sessions default to foreground. Explicit `background: true` requires the fork's native background-run API and a host that stays open for completion. Stopping, reloading, leaving the session branch, or exiting cancels pending opinions. Runs do not survive a process restart.
-
-`/skill:make-bot-ui` guides creation of a user-owned browser UI, authenticated webhook, and dedicated Pi RPC session. It starts no listener when pstack loads. A requested remote-access or unattended deployment still needs the user's real network and host setup.
-
-The bundled profiles inherit the session model instead of pinning a credentialed provider. Existing explicit choices in `~/.pi/agent/pstack-models.md` still take precedence. Diverse-model panels require actual available models; they do not invent routes or silently collapse to one family.
-
-## Waiting on a pull request
-
-`/skill:watch-pr` is a Pi-owned skill; it is not part of upstream `pstack`. Its watcher, `skills/watch-pr/scripts/watch-pr.mjs`, waits until one GitHub pull request is ready to merge or blocked. It runs on Node without other dependencies and only reads from GitHub.
-
-```bash
-node /path/to/pi-pstack/skills/watch-pr/scripts/watch-pr.mjs https://github.com/OWNER/REPO/pull/123
+```sh
+npm test          # 单元 + 发现 + 同步回归（需要本地 @earendil-works/pi-coding-agent）
+npm run check:sync  # 镜像漂移检查
+npm run sync         # 从上游 stage 一次同步，--continue 发布
 ```
 
-The last output is a verdict of at most 20 lines and 2048 bytes: `READY`, `MERGED`, `BLOCKED: <reason>` or `UNKNOWN: <reason>`, then the head commit, check counts, required reviewers, unresolved review threads and merge state. A commit whose expected checks have not started is never `READY`. [The skill](skills/watch-pr/SKILL.md) lists the exit codes and the decision rules.
-
-`watch-pr.json` in the Pi agent directory selects the GitHub CLI and the required reviewers for each owner or repository. Start from [the example](skills/watch-pr/config.example.json). Without the file, the watcher runs `gh` and requires no reviewer.
-
-## GitHub CLI selection for the stack watcher
-
-The upstream `skills/poteto-mode/scripts/watch-pr/watch-pr` helper watches stacks and merge queues. It does not read `watch-pr.json`, and it uses `gh` by default. On hosts with account-routing wrappers, explicitly select the appropriate executable for the repository:
-
-```bash
-WATCH_PR_GH=gh-personal /path/to/pi-pstack/skills/poteto-mode/scripts/watch-pr/watch-pr --owner OWNER --repo REPO --pr 123 --status-only
-# Use WATCH_PR_GH=gh-work for a work-account repository.
-```
-
-`WATCH_PR_GH` is one executable name on `PATH` or an executable path (quote paths containing spaces), not a shell command or a place for extra arguments. Unset or empty means `gh`. The selection applies to every watcher GitHub read, including context/stack discovery, checks, GraphQL rollups, and paginated review threads; git commands are unchanged. Select the wrapper authorized for the repository rather than bypassing its router or changing credentials. Omit `--status-only` for normal polling; review/merge gates and retry behavior are unchanged.
-
-## Synced workflow changes in 0.15.29
-
-- `/skill:create-formal-verification-skill` creates a project-local verification skill; `/skill:maintain-formal-verification-skill` checks for drift after code changes. Both can run without delegation. Actual verifier tooling must be available separately; this package does not bundle a model checker or prover. Generated-input testing is not an exhaustive proof.
-- `/skill:sharpen` now rewrites the prompt for a deeper task instead of executing the task. `/skill:ketchup` keeps every waiting item individually decidable.
-- `/skill:setup-pstack` offers formal-verification setup only on acceptance. Pi's adapter and existing approval gates still apply.
-
-## Maintenance
-
-```bash
-npm run sync                   # Fetch upstream and stage a three-way merge
-npm run sync -- --continue     # Publish the reviewed candidate locally
-npm run check:compat            # Check offline rendering, discovery, and pack
-node scripts/qualify-hosts.mjs  # Qualify both supported Pi hosts and providers
-```
-
-`vendor/pstack/` contains the exact source tree recorded in `upstream.json`; `pi/overlays/pstack.patch` holds Pi-owned changes. `check:sync` renders them offline and compares the generated inventory, file contents, and executable modes. Git-ignored local artifacts, such as installed helper dependencies, are not part of that inventory or the recorded overlay. To change Pi instructions, edit the generated resources, run `npm run record:overlay`, and review the resulting patch and generated diff.
-
-Npm normally omits `.gitignore` files. The package includes its root ignore rules through `.npmignore`, which must stay aligned with `.gitignore`; omitted upstream ignore files have their bytes and modes recorded in `upstream.json` so an unpacked package can reconstruct the same source tree offline. A Git checkout must contain the original upstream files.
-
-`npm run sync` prints the upstream change inventory and commands for inspecting both the upstream diff and the staged Pi rendering in `.pstack-sync/worktree`. Review every upstream change and every changed adapted section, including clean merges. Resolve conflicts there and `git add` the resolutions. Classify unknown additions in `.pstack-sync/review.json`; preserve removed skills in the staged worktree unless their removal is explicitly approved in that file. `--continue` validates the complete candidate before replacing generated paths and restores the previous files if publication fails. It never advances provenance on an unresolved conflict or unapproved removal.
-
-The scheduled PR includes the change inventory for the same review. GitHub may require a maintainer to approve the PR's workflow runs because the PR is created with `GITHUB_TOKEN`; the preparation job already runs the compatibility and exact-host checks with read-only permissions.
-
-Set `PI_HOST_INDEX=/absolute/path/to/pi-coding-agent/dist/index.js` to qualify a particular host. Native tests use an isolated packed package, HOME, and agent directory, without external inference. The named test baseline protects the initially reviewed commands; native discovery must expose every bundled skill. SDK queue checks exercise expansion of the synced formal-verification and sharpen commands without launching a model.
-
-`exact-hosts` also qualifies the profile-based `pi-subagents` npm package's **0.86.0** loader on both hosts in a separate install prefix. To include that regression locally, set `PI_SUBAGENTS_INDEX=/absolute/path/to/pi-subagents/bundle/index.js` when running `npm run smoke`, with `PI_HOST_INDEX` pointing to its host. Without that variable, that subtest is skipped; the standalone checks still run. The integration checks packed-profile discovery through the provider's public `subagent` tool and its dynamic/eager loadout, without launching workers.
-
-### Exact hosts and the configured provider
-
-CI's `exact-hosts` job runs `node scripts/qualify-hosts.mjs`. The upstream sync runs the same script on the candidate before opening a PR, so a failure opens its sync-failure issue instead. The script pins these sources in one place:
-
-- official Pi **1.5.2** from npm;
-- `fitchmultz/pi` commit `87d3b99`, built and validated by that fork's documented staged release installer (`scripts/install-fork.mjs --stage`), which never selects the build;
-- `@fitchmultz/pi-subagents` commit `8ae7974` (version 0.52.49), installed by Pi's own `pi install git:…`, which runs the provider's pinned `prepare` build;
-- the profile-based `pi-subagents` npm package **0.86.0**, in a separate install prefix that contains no second Pi because its Pi peers are optional.
-
-It then runs `npm run smoke` on each host with `PI_FITCH_SUBAGENTS_INDEX` and `PI_SUBAGENTS_INDEX` set, so both provider subtests run there. The `@fitchmultz/pi-subagents` subtest loads that package through Pi settings and checks that `delegate` and `agent_runs` are active and come from that package, and that `/skill:how` reaches Pi's model check both with and without those tools. Pi's built-in faux model then drives one offline delegation from the parent to a real child process and back. To run it locally, set `PI_FITCH_SUBAGENTS_INDEX=/absolute/path/to/pi-subagents/dist/index.js` along with `PI_HOST_INDEX`; without that variable, this subtest is also skipped.
-
-Limits: the faux model proves delegation wiring, not live-model behavior, and no model credentials or paid inference calls are used. Set `PI_PSTACK_HOSTS_CACHE_DIR` to a dedicated empty or previously populated `qualify-hosts` directory (as CI does via `actions/cache`) to reuse staged host and provider installs when the pins are unchanged; the script replaces owned cache contents on pin updates and refuses unowned non-empty directories. Building the hosts needs network access, Node 24.22.3 or later in the 24.x line with npm, and the fork installer's prerequisites, including tmux and Git 2.40 or later (the fork's source archive uses `git archive --mtime`). The fork build fetches its model catalog when it runs, so that catalog can differ from an installed release of the same commit; the offline smoke does not exercise live-model or catalog behavior. Change the pins only in `scripts/qualify-hosts.mjs`.
-
-## License
-
-MIT. Upstream `pstack` is Copyright (c) 2026 Lauren Tan (see [`LICENSE`](./LICENSE)).
+`npm test` 会在仓库里找不到 pi 时回落到全局安装，注意全局版本需 1.5.x，否则 rpc 发现测试会在旧版本上误报。

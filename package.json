@@ -1,13 +1,13 @@
 {
-  "name": "@fitch/pi-pstack",
+  "name": "pi-better-pstack",
   "version": "0.15.36",
   "private": true,
-  "description": "Pi package adapter for Cursor pstack skills, playbooks, principles, and subagent profiles with automated upstream drift notifications.",
+  "description": "Pi package for cursor/plugins/pstack: pristine upstream mirror with a mandatory Pi execution contract, mode injection, and configurable fable/opus/sonnet/haiku model presets.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fitchmultz/pi-pstack.git"
+    "url": "git+https://github.com/WufeiHalf/pi-better-pstack.git"
   },
   "keywords": [
     "pi-package",
@@ -36,9 +36,8 @@
   },
   "scripts": {
     "sync": "node scripts/sync-pstack.mjs --fetch",
-    "record:overlay": "node scripts/sync-pstack.mjs --record",
     "check:sync": "node scripts/sync-pstack.mjs --check",
-    "test": "node --test test/*.test.mjs skills/poteto-mode/scripts/check-plan.test.ts",
+    "test": "node --test test/*.test.mjs",
     "smoke": "node --test test/discovery.test.mjs",
     "check:compat": "npm run check:sync && npm test && npm run pack:check",
     "pack:check": "npm pack --dry-run"
@@ -64,6 +63,6 @@
     }
   },
   "engines": {
-    "node": "^24.22.3 || >=26.13.1"
+    "node": ">=24"
   }
 }

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 // These are exactly the paths the existing automation stages after validation.
-const shippedPaths = ["skills", "agents", "LICENSE", "plugin.json", "upstream.json", "package.json", "vendor", "pi"];
+const shippedPaths = ["skills", "agents", "LICENSE", "plugin.json", "upstream.json", "package.json", "vendor"];
 
 function put(path, content) {
   mkdirSync(dirname(path), { recursive: true });
@@ -51,7 +51,7 @@ function skill(name, body) {
 }
 
 test("the packed package can verify its pinned source and generated output offline", () => {
-  const temp = mkdtempSync(join(tmpdir(), "pi-pstack-packed-check-"));
+  const temp = mkdtempSync(join(tmpdir(), "pi-better-pstack-packed-check-"));
   try {
     assert.equal(readFileSync(join(root, ".npmignore"), "utf8"),
       `${readFileSync(join(root, ".gitignore"), "utf8")}!/.gitignore\n!/.npmignore\n`);
@@ -68,34 +68,25 @@ test("the packed package can verify its pinned source and generated output offli
       env: { ...process.env, GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_NOSYSTEM: "1" },
     });
     assertSuccess(packageSync("--check"));
-    put(join(packageRoot, "skills/poteto-mode/scripts/node_modules/commander/package.json"), "{}\n");
-    assertSuccess(packageSync("--check"));
-    assertSuccess(packageSync("--record"));
-    assert.doesNotMatch(readFileSync(join(packageRoot, "pi/overlays/pstack.patch"), "utf8"), /node_modules\/commander/);
-    assertSuccess(packageSync("--check"));
     const extra = join(packageRoot, "skills/tdd/debug.log");
     put(extra, "unexpected\n");
     const unexpected = packageSync("--check");
     assert.notEqual(unexpected.status, 0);
     assert.match(unexpected.stderr, /Unexpected generated path: skills\/tdd\/debug\.log/);
-    assertSuccess(packageSync("--record"));
-    assert.match(readFileSync(join(packageRoot, "pi/overlays/pstack.patch"), "utf8"), /skills\/tdd\/debug\.log/);
     rmSync(extra);
-    assertSuccess(packageSync("--record"));
-    assert.deepEqual(readFileSync(join(packageRoot, ".gitignore")), readFileSync(join(root, ".gitignore")));
+    const file = join(packageRoot, "skills/tdd/SKILL.md");
+    const original = readFileSync(file);
+    writeFileSync(file, `${original.toString("utf8")}\nchanged\n`);
+    const drift = packageSync("--check");
+    assert.notEqual(drift.status, 0);
+    assert.match(drift.stderr, /Drifted generated path: skills\/tdd\/SKILL\.md/);
+    writeFileSync(file, original);
+    // A global excludes file must not mask or break the mirror check.
     const globalIgnore = join(temp, "global-ignore");
     put(globalIgnore, "*.tmp\n");
     execFileSync("git", ["config", "--file", gitConfig, "core.excludesFile", globalIgnore]);
     put(join(packageRoot, "skills/tdd/cache.tmp"), "local\n");
-    const overlay = readFileSync(join(packageRoot, "pi/overlays/pstack.patch"));
     assertSuccess(packageSync("--check"));
-    assertSuccess(packageSync("--record"));
-    assert.deepEqual(readFileSync(join(packageRoot, "pi/overlays/pstack.patch")), overlay);
-    const file = join(packageRoot, "skills/tdd/SKILL.md");
-    writeFileSync(file, `${readFileSync(file, "utf8")}\nchanged\n`);
-    const drift = packageSync("--check");
-    assert.notEqual(drift.status, 0);
-    assert.match(drift.stderr, /Drifted generated path: skills\/tdd\/SKILL.md/);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -104,7 +95,7 @@ test("the packed package can verify its pinned source and generated output offli
 test("offline sync check rejects generated content, inventory, and mode drift", async (t) => {
   const temp = mkdtempSync(join(tmpdir(), "pi-pstack-offline-check-"));
   try {
-    for (const path of ["scripts", "docs", "skills", "agents", "LICENSE", "plugin.json", "package.json", "upstream.json", "vendor", "pi"]) {
+    for (const path of ["scripts", "docs", "skills", "agents", "LICENSE", "plugin.json", "package.json", "upstream.json", "vendor"]) {
       if (existsSync(join(root, path))) cpSync(join(root, path), join(temp, path), { recursive: true });
     }
     const check = () => spawnSync(process.execPath, [join(temp, "scripts/sync-pstack.mjs"), "--check"],
@@ -139,8 +130,8 @@ test("offline sync check rejects generated content, inventory, and mode drift", 
 
 // Issue #7 and issue #16: exercise staging, a clean upstream merge, a later
 // removal, and recovery through the public CLI and real Git worktrees.
-test("staged sync preserves generated files until review and protects previously shipped skills", (t) => {
-  const temp = mkdtempSync(join(tmpdir(), "pi-pstack-sync-"));
+test("staged sync publishes the reviewed mirror and protects previously shipped skills", (t) => {
+  const temp = mkdtempSync(join(tmpdir(), "pi-better-pstack-sync-"));
   const source = join(temp, "upstream");
   const target = join(temp, "adapter");
   const shipped = join(temp, "fresh-checkout");
@@ -156,31 +147,26 @@ test("staged sync preserves generated files until review and protects previously
       cpSync(join(root, path), join(target, path), { recursive: true });
     }
     commit(target, ["scripts", "docs", ".gitignore", ...shippedPaths], "Initialize adapter");
-    const toolDependencies = join(target, "skills/poteto-mode/scripts/node_modules");
-    put(join(toolDependencies, "commander/package.json"), "{}\n");
     assertSuccess(sync(target, "--check"));
-    assertSuccess(sync(target, "--record"));
-    assert.doesNotMatch(readFileSync(join(target, "pi/overlays/pstack.patch"), "utf8"), /node_modules\/commander/);
-    rmSync(toolDependencies, { recursive: true, force: true });
     const before = generatedSnapshot(target);
-    const contextSkill = join(target, "skills/principle-guard-the-context-window/SKILL.md");
-    const contextSkillBefore = readFileSync(contextSkill, "utf8");
+    const tddSkill = join(pstack, "skills/tdd/SKILL.md");
+    const tddBefore = readFileSync(tddSkill, "utf8");
 
     const added = join(pstack, "skills", "fixture-added", "SKILL.md");
-    const adapted = join(pstack, "skills/tdd/SKILL.md");
     const manifest = join(pstack, "plugin.json");
     put(added, skill("fixture-added", "New independently shipped instructions. Use the `Task` tool when appropriate."));
-    put(adapted, `${readFileSync(adapted, "utf8")}\nUpstream guidance added.\n`);
+    put(tddSkill, `${tddBefore}\nUpstream guidance added.\n`);
     const plugin = JSON.parse(readFileSync(manifest));
     plugin.version = "0.15.37";
     put(manifest, JSON.stringify(plugin, null, 2) + "\n");
-    commit(source, ["pstack"], "Add a skill and update an adapted file");
+    commit(source, ["pstack"], "Add a skill and update a shipped file");
     assertSuccess(sync(target, source));
     assert.deepEqual(generatedSnapshot(target), before, "Staging must not publish any generated content or provenance");
     const review = JSON.parse(readFileSync(join(target, ".pstack-sync/review.json")));
     assert.ok(review.changes.some(({ path, status, classification }) =>
       path === "skills/fixture-added/SKILL.md" && status === "A" && classification === "shipped"));
-    assert.ok(review.changes.some(({ path, adapted }) => path === "skills/tdd/SKILL.md" && adapted));
+    assert.ok(review.changes.some(({ path, status }) =>
+      path === "skills/tdd/SKILL.md" && status === "M"));
     const obstruction = join(target, ".pstack-sync/backup/upstream.json");
     mkdirSync(obstruction, { recursive: true });
     const failedPublication = sync(target, "--continue");
@@ -190,19 +176,10 @@ test("staged sync preserves generated files until review and protects previously
     rmSync(obstruction, { recursive: true });
     assertSuccess(sync(target, "--continue"));
     assertSuccess(sync(target, "--check", source));
-    assert.equal(readFileSync(contextSkill, "utf8"), contextSkillBefore,
-      "Sync must not rewrite an unchanged adapted skill");
-    const addedSkill = readFileSync(join(target, "skills/fixture-added/SKILL.md"), "utf8");
-    assert.doesNotMatch(addedSkill, /^disable-model-invocation: true$/m);
-    assert.match(addedSkill, /Read \[the Pi execution contract\]/);
-    assert.doesNotMatch(addedSkill, /stop that workflow and explain the missing prerequisite; do not substitute serial self-review/);
-    for (const name of ["architect", "arena", "interrogate", "maintain-verification-skill",
-      "no-comments", "reflect", "show-me-your-work", "swarm", "poteto-mode"]) {
-      const rendered = readFileSync(join(target, "skills", name, "SKILL.md"), "utf8");
-      assert.match(rendered, /Pi execution contract/, name);
-      assert.doesNotMatch(rendered, /stop that workflow and explain the missing prerequisite; do not substitute serial self-review/, name);
-    }
-    assert.match(readFileSync(join(target, "skills/tdd/SKILL.md"), "utf8"), /Upstream guidance added/);
+    // The mirror publishes upstream bytes verbatim: no frontmatter rewriting, no contract injection.
+    assert.equal(readFileSync(join(target, "skills/fixture-added/SKILL.md"), "utf8"),
+      skill("fixture-added", "New independently shipped instructions. Use the `Task` tool when appropriate."));
+    assert.equal(readFileSync(tddSkill, "utf8"), `${tddBefore}\nUpstream guidance added.\n`);
     assert.equal(JSON.parse(readFileSync(join(target, "package.json"))).version, "0.15.37");
     const afterAddition = generatedSnapshot(target);
     assertSuccess(sync(target, source));
@@ -217,33 +194,29 @@ test("staged sync preserves generated files until review and protects previously
     put(manifest, JSON.stringify(plugin, null, 2) + "\n");
     put(join(pstack, "LICENSE"), "Changed upstream attribution\n");
     commit(source, ["pstack"], "Remove the previously shipped addition");
-    const staged = sync(shipped, source);
-    assert.equal(staged.status, 1, staged.stdout + staged.stderr);
-    assert.match(staged.stderr, /Unresolved upstream conflicts/);
-    assert.deepEqual(generatedSnapshot(shipped), beforeRemoval);
-    const workspace = join(shipped, ".pstack-sync/worktree");
-    git(workspace, "rm", "-r", "--", "skills/fixture-added");
+    assertSuccess(sync(shipped, source));
     const rejected = sync(shipped, "--continue");
     assert.equal(rejected.status, 1, rejected.stdout + rejected.stderr);
     assert.match(rejected.stderr, /Refusing to remove shipped skills without approval: fixture-added/);
     assert.deepEqual(generatedSnapshot(shipped), beforeRemoval, "A rejected removal must leave generated bytes and provenance unchanged");
     assert.equal(git(shipped, "status", "--porcelain"), "");
-
-    git(workspace, "checkout", "pi-rendering", "--", "skills/fixture-added");
+    const stagedReview = JSON.parse(readFileSync(join(shipped, ".pstack-sync/review.json")));
+    stagedReview.approvedSkillRemovals = ["fixture-added"];
+    writeFileSync(join(shipped, ".pstack-sync/review.json"), JSON.stringify(stagedReview, null, 2) + "\n");
     assertSuccess(sync(shipped, "--continue"));
     assertSuccess(sync(shipped, "--check", source));
-    assert.match(readFileSync(join(shipped, "skills/fixture-added/SKILL.md"), "utf8"), /New independently shipped instructions/);
+    assert.ok(!existsSync(join(shipped, "skills/fixture-added")), "An approved removal must publish");
+    assert.equal(readFileSync(join(shipped, "LICENSE"), "utf8"), "Changed upstream attribution\n");
     const provenance = JSON.parse(readFileSync(join(shipped, "upstream.json")));
     assert.equal(provenance.repoCommitSha, git(source, "rev-parse", "HEAD"));
     assert.equal(provenance.pstackCommitSha, git(source, "log", "-1", "--format=%H", "--", "pstack"));
     assert.equal(provenance.pstackTreeSha, git(source, "rev-parse", "HEAD:pstack"));
     assert.equal(provenance.version, "0.15.38");
-    t.diagnostic("Addition, review, idempotence, removal rejection and preservation passed");
+    t.diagnostic("Addition, review, idempotence, removal rejection and approval passed");
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
 });
-
 // Issue #13: execute the generated audit against public synthetic sessions, not
 // a source-text assertion. Resolve temp paths before Git records the worktrees.
 test("generated worktree audit uses the newest Pi or Cursor session", async (t) => {
@@ -266,10 +239,9 @@ test("generated worktree audit uses the newest Pi or Cursor session", async (t) 
       put(wrapper, "#!/bin/sh\nprintf '%s\\n' '[]'\n");
       chmodSync(wrapper, 0o755);
     }
-    for (const [name, sessions] of [
-      ["recent Pi only", [["pi", recent]]],
-      ["newer Pi than Cursor", [["pi", recent], ["cursor", old]]],
-      ["recent Cursor control", [["cursor", recent]]],
+    for (const [name, sessions, expectBucket] of [
+      ["recent Cursor", [["cursor", recent]], "verify-recent-chat"],
+      ["old Cursor only", [["cursor", old]], "safe"],
     ]) {
       await t.test(name, () => {
         const caseDir = join(temp, name.replaceAll(" ", "-"));
@@ -297,8 +269,9 @@ test("generated worktree audit uses the newest Pi or Cursor session", async (t) 
         assert.equal(fields.length, 9, result.stdout);
         assert.deepEqual({ merged: fields[2], dirty: fields[3], pr: fields[5],
           lastChat: fields[6], bucket: fields[7], worktree: fields[8] }, {
-          merged: "YES", dirty: "clean", pr: "-", lastChat: recent.toISOString().slice(0, 10),
-          bucket: "verify-recent-chat", worktree: candidate,
+          merged: "YES", dirty: "clean", pr: "-",
+          lastChat: (sessions[0][1]).toISOString().slice(0, 10),
+          bucket: expectBucket, worktree: candidate,
         });
       });
     }

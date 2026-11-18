@@ -6,8 +6,6 @@ disable-model-invocation: true
 
 # Prove It Works
 
-Read [the Pi execution contract](../../docs/harness/pi.md). Use available authorized delegation or work inline, labeling lost independence; keep actual external gates and live-proof requirements.
-
 Verify every task output by checking the real thing directly. Do not infer from proxies, self-reports, or "it compiles."
 
 **Why:** Unverified work has unknown correctness. Indirect verification (file mtimes, output freshness, agent self-reports, cached screenshots) feels cheaper than direct observation. Acting on a wrong inference costs far more than checking the source.

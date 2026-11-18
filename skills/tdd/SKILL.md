@@ -1,11 +1,10 @@
 ---
 name: tdd
-description: "Use only when the user asks for TDD or a regression test, or the bug has an obvious, cheap local test target."
+description: "Use only when the user explicitly asks for TDD, a failing test, or a regression test, OR when the bug has an obvious cheap local test target. Skip when the test path is unclear, expensive, integration-heavy, or not requested."
+disable-model-invocation: true
 ---
 
 # TDD Bug Fix
-
-Read [the Pi execution contract](../../docs/harness/pi.md).
 
 When fixing a bug with a clear, cheap test path, make the broken behavior executable before changing production code. The goal is a focused regression test that fails before the fix and passes after it.
 

@@ -1,111 +1,36 @@
 # pstack in Pi
 
-Read this adapter once when following a pstack skill in a session; reuse it until the relevant instructions change. `<pstack>` is the package directory containing `skills/`, `agents/`, and `docs/`. These Pi instructions override automatic workflow triggers and Cursor-specific tool, profile, model, and path assumptions in the upstream text, including its references and playbooks. Repository `AGENTS.md`, user authority, and safety requirements still take precedence.
+Read this contract before following any pstack skill in this session, then keep it for the whole session. `<pstack>` is this package's directory. This contract overrides runtime-specific tool, model, and path assumptions in the upstream skill text. Repository `AGENTS.md` gates (coding, testing, git rules) are constraints inside the pstack flow, not a replacement for it.
 
-## Task scope and workflow selection
+## Playbooks and checklist
 
-These rules override poteto-mode's Non-negotiables triggers and automatic specialist steps in its playbooks.
+- On a task, match it to a playbook and open `<pstack>/skills/poteto-mode/playbooks/<title>.md` before any task-specific work. Copy the playbook's steps verbatim into a visible checklist and keep it updated: each step is done, in progress, or carries a `skip: <reason>` line.
+- Pi has no task-tracking tool. The checklist is an uncommitted `todo.md` in the work dir (`.audit/<task-slug>.todo.md` when sessions share the checkout), holding the playbook steps verbatim plus task todos.
 
-- Investigate the facts needed to complete and verify the requested outcome. Stop expanding research once the relevant decisions are supported. Do not turn a specific request into a general policy.
-- Select specialist workflows when the user names them, the repository requires them, or a concrete task need justifies them. A nontrivial change, a function boundary, or a review alone does not require `how`, `architect`, `arena`, or `no-comments`. Preserve useful artifacts and required checks. Omit inapplicable optional steps without a skip ledger.
-- Report results, consequential choices, verification, and remaining gaps. Routine inline work needs no delegation disclaimer. When the requested workflow promises independent review, multiple models, or parallel execution, state what actually ran and any material limitation once. Never present self-review as independent review.
-- Keep the existing design when it covers the required behavior. First-principles reasoning does not authorize a rewrite. Compare whole-design alternatives when an unresolved architectural tradeoff warrants them, not when a sufficient local change is already supported.
-- Build a script or prototype when it resolves a concrete uncertainty or makes repeated work safer. Nontrivial work alone does not require a new tool.
-- Reviews, comment cleanup, and broken skills do not authorize unrelated refactors or side PRs. Report out-of-scope findings without expanding the task. Preserve repository evidence requirements and explicit approval gates.
+## Delegation
 
-## Standalone use and prerequisites
-
-Pi natively loads this package's skills and update/status extension. Writing, principles, TDD, local analysis, and other inline work need no sibling extension. The `pi.subagents.agents` manifest metadata is an **optional pi-subagents integration**, not a native Pi profile registry. The top-level `subagents.agents` alias is retained for older adapters.
-
-Check capabilities when the next step needs a tool or provider whose availability is uncertain. Use the tools and resources already visible in the session before making an extra discovery call. For tools not already visible, use the host's advertised discovery entry points and read their returned instructions. Discovery and tool exposure belong to Pi and the selected provider. Presence does not establish permission, provider readiness, or model access.
-
-### Choose the execution route
-
-1. If the user or project forbids delegation, work inline. Otherwise inspect the available tool list and any advertised discovery catalog. Call a loader only when advertised, then recheck its actual schema and run controls. An installed package or familiar profile name does not prove availability.
-2. Use an authorized, callable provider when it can complete the assignment in the current session while honoring the user's and project's tool, data, and write restrictions. If the provider cannot enforce a required restriction, work inline instead. Give each worker the full task, authority, evidence, and output location. A launch receipt is not a result. Observe the provider's actual completion and inspect the result before using it.
-3. If no provider is reachable, the session cannot keep a child alive, or availability remains unknown after discovery, perform the same substantive work inline. Report unknown as unknown. Run distinct lenses or candidates serially and label the loss of independence, isolation, model diversity, and parallel execution where relevant.
-4. If a launch outcome is uncertain, inspect the provider's run state before repeating it. If no child started, continue inline. Recheck the route before later delegation and after tool changes.
-
-These rules apply to direct commands and nested skill reads. An inline review is `PASS (self-verified)` only after the parent performs the actual checks. When no authorized independent reviewer is available, this self-verdict replaces an upstream pstack playbook's mandatory cross-family verifier; it is not an independent review. It cannot satisfy an independent review required by the user, project, or forge. A text-only model opinion is not an independent tool-using review. Real required checks, branch protections, approvals, and explicit holds still apply. An actual failing review is not reviewer unavailability.
-
-### Keep the main agent responsive
-
-Launch delegated work in the background, including reviewers, explorers, candidates, judges, and resumed workers. Launch independent assignments together rather than waiting for one result before starting the next. This applies to every pstack skill and playbook, including nested skill reads.
-
-- With `@fitchmultz/pi-subagents`, `delegate` and `agent_runs({ action: "continue", ... })` return receipts without waiting for completion. Do not add unsupported `async` or `wait` fields.
-- With the profile-based `pi-subagents` package, use `async: true` for launches and outer workflow calls. Its `action: "resume"` starts a background continuation; use `steer` for guidance to a running child. A workflow may await its own children, but the outer workflow must stay in the background.
-- Use `pstack_opinion` for supplied-text consultations only, with its background route below. It does not replace a worker that needs tools. It is deferred; load it with `tool_search` before the first call.
-- After a receipt, continue independent work. If the next step needs the result and no independent work remains, end the turn with the work identified as pending. Let the completion notification resume the main agent. Do not hold a tool open, sleep, or poll for model completion.
-- Inspect the completed result before using it. A launch receipt, queued steer, or stop acknowledgement does not prove completion, compliance, or process exit. Follow the provider's actual cancellation controls.
-
-An explicitly requested foreground script may wait. A one-shot host that exits before notifications arrive cannot run this background flow; use the documented foreground or inline route rather than leaving work orphaned.
-
-- `poteto-mode` supplies its inline style and principles without delegation. A missing required live driver or other real prerequisite remains a gap; do not substitute a simulation for a live verification.
-- `/pstack-mode` opens Pi's mode picker; `on|off|status` arguments provide direct control. Enabled mode appears in Pi's status area and applies to the active session branch. The setting follows saved-session resume and tree navigation. If this package's skill is excluded or another extension forces the system prompt, follow the reported limitation rather than assuming the mode was applied.
-- Live UI/TUI proof needs an actual driver for that surface. A repository-owned Playwright, PTY, simulator, or HTTP harness can suffice. Otherwise discover a suitable tool/skill if advertised. If no driver can exercise the required interaction, report the blocked proof. Source review, screenshots without interaction, and unit tests do not substitute for it.
-- Preserve user questions and approval gates. Ordinary conversation can ask a question and wait for the user's answer when no dialog tool exists. Never substitute a default answer for required approval.
-
-## Tools
-
-| Cursor | Pi |
-| --- | --- |
-| `Task` | Use an available delegation provider's actual schema. Current pi-subagents exposes `delegate` and `agent_runs`. Profile-based providers may advertise `subagents_enable` and `subagent`; call their loader and discover profiles when available. Use only advertised entry points. Otherwise perform the work inline and report the loss of independence or parallelism. |
-| `AskQuestion` | Use an available question tool, or ask in conversation and wait. With `ask_question`, order options from most recommended to least; Pi adds its own custom-answer option. |
-| Open a todolist | Keep a concise checklist in the reply or a task-owned file. Use `notes` only if available. |
-| Run another pstack skill (`/name` or "the **name** skill") | Resolve the installed skill through Pi's resource discovery, then read its `SKILL.md` in full and check prerequisites. Principles and command-only skills are installed but not listed to the model; follow the route's link to read them. Honor resource exclusions instead of bypassing them by reading a filtered skill directly. User-facing invocations are `/skill:<name>`. |
-| `/deslop` | Apply the code-cleanup procedure below. A separately installed `deslop` skill is optional. |
-| `control-cli` | Use the repository's real CLI/TUI driver or a discovered terminal-control capability. A bounded CLI command can run through native `bash`; interactive TUI proof requires a PTY or equivalent driver. No `interactive-testing` skill is assumed. |
-| `control-ui` | Use a repository-owned UI harness or available browser/native-app tools. `dogfood` and `macuse` skills are optional, not prerequisites supplied by Pi. Stop if the required live interaction cannot be driven. |
-| `/loop` | For a finite watcher, use `background_command` if available, or a bounded native `bash` command. To wait on a GitHub pull request, use the `watch-pr` skill's watcher, not a hand-written loop. Neither a foreground command nor a task checklist supplies persistent periodic wakeups. If the workflow needs unattended recurring wakes and no scheduler is available, report the missing capability and stop that phase. |
-| `/create-skill` | Write `SKILL.md` in `.pi/skills/<name>/` or `~/.pi/agent/skills/<name>/`, following existing repository skill checks. `/reload` refreshes native discovery. No separate authoring skill is required. |
-| `Grep`, `Glob` | Native `bash` with `rg` / `find`, and `read` for file contents. |
-
-### Code cleanup
-
-Inspect the changed diff and surrounding contracts. Remove redundant narration, speculative scaffolding, forwarding-only helpers, unjustified casts or suppressions, and catches that hide failures. Preserve behavior, validation, error identity, cleanup, accessibility, and necessary comments, including `ponytail:` ceilings and repository-required evidence. Use the repository's formatter and required checks, then inspect the resulting diff. This cleanup is not an independent review and does not replace a reviewer required by the task.
-
-## Delegation fields and profiles
-
-The following examples cover current pi-subagents and older profile-based providers, not native Pi APIs. Use the selected provider's actual schema. Do not pass unsupported fields or silently discard a required capability.
-
-| Cursor | Pi with a delegation provider |
-| --- | --- |
-| `subagent_type: generalPurpose` | With `delegate`, put role requirements and authority in the complete assignment. With a profile-based provider, discover a suitable profile. This describes a role, not a guaranteed profile name. |
-| `poteto-agent`, `comment-sicko` | Use these package-owned profiles only if the provider discovers them. With `delegate`, put the corresponding `<pstack>/agents/*.md` instructions or readable paths in the assignment. Preserve Comment Sicko's report-only boundary. If no independent session is available, follow the same role instructions inline and label the review self-performed. |
-| `readonly: true` | Explicitly forbid edits in the assignment. Use a read-only profile if the provider supplies one. Pi does not have Cursor's readonly/Ask mode or its claimed automatic MCP removal. Honor the provider's actual tool restrictions. |
-| `readonly: false` | State the assignment's write authority. Choose an execution profile only if the provider uses profiles. This does not grant unrelated writes. |
-| `environment: "cloud"` | Use the provider's supported isolation for parallel writers, or prepare separate worktrees and pass each provider's supported cwd. Pi does not supply Cursor cloud VMs. If independent isolation is unavailable, run the work serially and say so. |
-| `environment: "local"` | Run in the intended local cwd, preserving shared-worktree safety. |
-| `cloud_base_branch: <b>` | Name branch `<b>` and the exact starting revision in the isolated worker's brief. |
-| `run_in_background: true` | Current pi-subagents launches asynchronously and rejects `async` fields and `agent_runs.wait`. Completion notifications require a persistent main. In one-shot print or a child session where this provider cannot finish, do the work inline rather than launching children that will be stopped. Otherwise launch authorized work, continue independent work, and inspect completed results. |
-| `resume` | Current pi-subagents uses `agent_runs({ action: "continue", id, prompt })` and returns a receipt. Older profile-based providers may use `subagent({ action: "resume", id, message })`. |
-| `file_attachments` | With advanced `subagent`, use `reads: ["path/to/file"]`; otherwise put readable paths and required original instructions in the task brief. |
-
-Profiles supply defaults, not the original task. The parent supplies requirements, settled decisions, scope, evidence, authority, acceptance, verification venue, output paths, and stop conditions. The parent reviews and integrates results. Never assume a generic profile exists, or count the parent's own second pass as an independent agent.
+- The Claude Code `Task` tool is Pi's `Agent` tool.
+- Playbook-step code delegates and helpers use `subagent_type: "poteto-agent"` (bare name; likewise `comment-sicko`). The namespaced form `pstack:poteto-agent` does not exist on Pi.
+- Spawn in the background (`run_in_background: true`) and continue independent work; inspect the diff and results yourself before using them.
+- Fresh subagents by default, with consolidated scope. The parent owns every subagent's work.
+- A review gate stays closed when no independent reviewer can run; record `BLOCKED: independent review` in the checklist.
 
 ## Models
 
-Pi model IDs are `provider/model`, with `:effort` where the selected delegation provider supports that syntax. Cursor slugs such as `claude-<family>-<version>-<effort>[-fast]`, `grok-*`, and `gpt-*` are not proof of an available Pi model or provider.
+- The role model names in the skill text (`fable`, `opus`, `sonnet`, `haiku`) are configured presets in `~/.pi/agent/pstack-models.md`, one per line: `fable: provider/modelId @level`. Pass the bare alias in the `model` field; the preset routes to the configured physical model and reasoning level.
+- Pass reasoning adjustments in the `thinking` field; the preset forwards the level to the physical model.
+- If a preset is not configured or the tool rejects the name, omit `model` so the child inherits the parent model, and say so in your reply.
 
-- Pi does not load the `pstack-models.mdc` rule. If `~/.pi/agent/pstack-models.md` exists, read it for explicit per-role choices. Preserve those choices; do not overwrite the file during ordinary work or write model policy into `AGENTS.md`.
-- Without a configured choice, ordinary jobs inherit the current session model by omitting the model override. No Cloudflare route, sibling profile default, or hard-coded model catalog is assumed. The optional bundled profiles likewise inherit the host model.
-- Resolve explicit choices against the selected host's available models and the delegation provider's contract. `auto` and `inherit-parent` mean the parent session model, not an unrelated profile's pinned model. Use the provider's actual inheritance option or the parent's verified model ID when omission would use a different default.
-- When diverse models or families are available and authorized, use actual configured IDs. Otherwise continue with the available route and report the missing diversity; never silently present repeated parent-model work as a diverse panel.
-- `pstack_opinion` can request a text-only opinion from an explicitly configured `provider/model` using only the material supplied in the call. Keep `model` as the exact configured ID and pass an optional `reasoning` field separately, such as `"reasoning": "max"`, rather than appending `:max` to the ID. Pi handles model support for reasoning without changing global settings. The opinion has no tools or independent repository access. It is not a delegated reviewer, a verified finding, or a replacement for required panel seats.
-- In persistent Pi fork sessions, call `pstack_opinion` directly to start it in the background, then continue independent work. Pi delivers the completed answer or error automatically. Do not treat the receipt as the opinion. Pass `background: false` when a script must await the answer; nested callers must own background execution themselves. Official Pi and one-shot print/JSON sessions default to foreground. Pending opinions are session-owned: stopping, reloading, leaving the branch, or exiting cancels them.
-- `/skill:setup-pstack` writes `~/.pi/agent/pstack-models.md` in Pi. Detect real available IDs, preserve existing choices, ask the stated budget/selection questions, and validate before writing. Map effort to the host/provider's supported levels, not Cursor's slug ladder. A missing discovery API is a reason to request the required model information, not to invent defaults.
+## Tool mapping
 
-## Paths and history
-
-| Cursor | Pi |
+| Upstream | Pi |
 | --- | --- |
-| `.cursor/skills/`, `~/.cursor/skills/` | `.pi/skills/`, `~/.pi/agent/skills/` |
-| `~/.cursor/plugins/`, `.cursor-plugin/plugin.json` | The actual loaded package root and `package.json`. Do not assume a git install location. |
-| `.cursor/rules/*.mdc`, always-applied rules | `AGENTS.md` for project policy; `~/.pi/agent/pstack-models.md` for optional model choices. |
-| Transcripts in `~/.cursor/projects/<slug>/agent-transcripts/` | `history` is optional. Use the current session's provided path or an explicitly selected workspace's session JSONL under `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions/`. Do not search unrelated workspaces or private chats. Without a transcript, use a tight digest of this conversation and disclose the gap. |
-
-## Cursor-only features and the Pi bot
-
-`make-bot-ui` builds a user-owned authenticated webhook receiver and a dedicated Pi RPC session; it does not require a Cursor routine. Real browser access, a running host, and any requested tailnet or scheduler remain prerequisites.
-
-Cursor Automations (`benny`), Bugbot auto-triggers, and Cursor Cloud VMs have no native Pi equivalent. State the missing capability when a user explicitly requires one. Skip a step only when it is genuinely optional and report the omission. Do not claim the full outcome after dropping a required step.
+| `Task` | `Agent` |
+| `AskUserQuestion` | Ask in conversation and wait |
+| Todolist tool | `todo.md` checklist per above |
+| Run another pstack skill | Resolve it through Pi's skill list (`/skill:<name>`), read its `SKILL.md` in full |
+| Principles (not listed to the model) | Read `<pstack>/skills/<name>/SKILL.md` by path |
+| `/deslop` | Apply the cleanup procedure to the diff: remove redundant narration, speculative scaffolding, forwarding-only helpers, catches that hide failures; keep behavior and required checks |
+| `Grep`, `Glob` | `bash` with `rg` / `find`, and `read` for contents |
+| Cursor paths `.cursor/...` | `.pi/skills/`, `~/.pi/agent/...` |
+| Transcripts `~/.cursor/projects/...` | `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions/` |

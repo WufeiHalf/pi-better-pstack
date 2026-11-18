@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// Mirrors cursor/plugins/pstack into this package, byte for byte, with link
+// rewriting as the only touch. Two phases: `stageSync` prepares a reviewable
+// candidate, `continueSync` publishes it after review.
 
 import { spawnSync } from "node:child_process";
 import { hash } from "node:crypto";
@@ -23,56 +26,12 @@ import { dirname, join, posix, relative, resolve as resolvePath } from "node:pat
 const ROOT = join(import.meta.dirname, "..");
 const REPOSITORY = "https://github.com/cursor/plugins";
 const VENDOR = "vendor/pstack";
-const OVERLAY = "pi/overlays/pstack.patch";
-const ADAPTER = "docs/harness/pi.md";
 const OUTPUTS = ["skills", "agents", "LICENSE", "plugin.json"];
 const STAGE = join(ROOT, ".pstack-sync");
 const LINK = /\]\(([^)\s]+)\)/g;
-// User-invoked workflows stay runnable through /skill:<name> and skill links but are not listed to the model.
-const COMMAND_ONLY_SKILLS = new Set([
-  "automate-me",
-  "in-your-own-words",
-  "ketchup-video",
-  "maintain-verification-skill",
-  "poteto-help",
-  "reflect",
-  "setup-pstack",
-]);
-const advertised = (skill) => !skill.startsWith("principle-") && !COMMAND_ONLY_SKILLS.has(skill);
-const DESCRIPTION_IN_BODY_SKILLS = new Set([
-  "principle-exhaust-the-design-space",
-  "principle-encode-lessons-in-structure",
-  "principle-migrate-callers-then-delete-legacy-apis",
-  "principle-guard-the-context-window",
-]);
-const EXECUTION_LINE = `Read [the Pi execution contract](../../${ADAPTER})`;
-const PLAYBOOK_CONTRACT = "../../../docs/harness/pi.md";
-
-const TERMS = [
-  { key: "`Task`", re: /`Task`|\bTask (tool|subagent|call)/ },
-  { key: "`AskQuestion`", re: /AskQuestion/ },
-  { key: "todolist", re: /\btodo ?list\b/i },
-  { key: "generalPurpose", re: /generalPurpose/ },
-  { key: "poteto-agent", re: /poteto-agent/ },
-  { key: "comment-sicko", re: /comment-sicko/ },
-  { key: "`readonly: true`", re: /readonly: (true|false)|readonly\/Ask/ },
-  { key: '`environment: "cloud"`', re: /environment: "(cloud|local)"/ },
-  { key: "cloud_base_branch", re: /cloud_base_branch/ },
-  { key: "`run_in_background: true`", re: /run_in_background/ },
-  { key: "`resume`", re: /`resume`/ },
-  { key: "`file_attachments`", re: /file_attachments/ },
-  { key: "claude-", re: /\bclaude-[a-z]+-\d/ },
-  { key: "grok-", re: /\bgrok-\d/ },
-  { key: "gpt-", re: /\bgpt-\d/ },
-  { key: "inherit-parent", re: /inherit-parent/ },
-  { key: "pstack-models.mdc", re: /pstack-models\.mdc/ },
-  { key: ".cursor/skills/", re: /\.cursor\/skills/ },
-  { key: "~/.cursor/plugins/", re: /\.cursor\/plugins|\.cursor-plugin/ },
-  { key: ".cursor/rules/", re: /\.cursor\/rules|always-applied rule/ },
-  { key: "agent-transcripts", re: /agent-transcripts|\.cursor\/projects/ },
-  { key: "Cursor-only features", re: /Bugbot|Cursor [Aa]utomation|cursor\.(sh|com)\/automations|[Cc]loud [Aa]gent/ },
-];
-const ROUTE_KEY = "Run another pstack skill";
+// Top-level upstream paths that exist but are not shipped; links into them are
+// rewritten to pinned absolute URLs during publish.
+const KNOWN_REFERENCE = [".cursor-plugin", ".gitignore", "README.md", "assets", "automations", "docs", "guide"];
 
 function git(cwd, args, options = {}) {
   const result = spawnSync("git", ["-C", cwd, "-c", "core.autocrlf=false", "-c", "core.filemode=true",
@@ -137,10 +96,6 @@ function commitIndex(repo, message) {
   return gitText(repo, "rev-parse", "HEAD");
 }
 
-function applyOverlay(repo, path) {
-  if (readFileSync(path).length) git(repo, ["apply", "--index", "--whitespace=nowarn", path]);
-}
-
 function ignoredOutputs(root, reference) {
   const checkout = existsSync(join(root, ".git"));
   const options = checkout ? [] : [`--work-tree=${root}`];
@@ -195,102 +150,8 @@ function walk(dir) {
   });
 }
 
-function classifySkills(skillsRoot) {
-  const skills = readdirSync(skillsRoot).filter((name) => existsSync(join(skillsRoot, name, "SKILL.md")));
-  const classes = new Map();
-  for (const skill of skills) {
-    const others = skills.filter((name) => name !== skill).join("|");
-    const route = new RegExp(`the \\*\\*(?<bold>${others})\\*\\* skill|\`/(?<command>${others})\``, "g");
-    const usesCursorNames = new Set();
-    for (const filePath of walk(join(skillsRoot, skill)).filter((path) => path.endsWith(".md"))) {
-      const text = readFileSync(filePath, "utf8");
-      for (const term of TERMS) if (term.re.test(text)) usesCursorNames.add(term.key);
-      if (text.split("\n").some((line) => [...line.matchAll(route)].some(
-        ({ groups }) => !line.includes(`(../${groups.bold ?? groups.command}/`),
-      ))) usesCursorNames.add(ROUTE_KEY);
-    }
-    classes.set(skill, { usesCursorNames });
-  }
-  return { skills, classes };
-}
-
-function adaptSkillEntries(repo) {
-  const { classes } = classifySkills(join(repo, "skills"));
-  for (const [skill] of classes) {
-    const path = join(repo, "skills", skill, "SKILL.md");
-    let text = readFileSync(path, "utf8");
-    const match = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-    if (!match) continue;
-    let [, frontmatter, body] = match;
-    frontmatter = frontmatter.replace(/^name:\s*.+$/m, `name: ${skill}`);
-    if (advertised(skill)) {
-      frontmatter = frontmatter.replace(/\n?^disable-model-invocation:\s*(true|false)\s*$/m, "");
-    } else if (/^disable-model-invocation:\s*(true|false)\s*$/m.test(frontmatter)) {
-      frontmatter = frontmatter.replace(/^disable-model-invocation:\s*(true|false)\s*$/m, "disable-model-invocation: true");
-    } else {
-      frontmatter += "\ndisable-model-invocation: true";
-    }
-    frontmatter = frontmatter.replace(/\n?^(?:icon|color):\s*.+$/gm, "");
-    const description = frontmatter.match(/^description:\s*(.+)$/m)?.[1].trim().replace(/^["']|["']$/g, "");
-    if (DESCRIPTION_IN_BODY_SKILLS.has(skill) && description && !body.includes(description)) {
-      body = body.replace(/^(# .+)\n+/m, `$1\n\n${description}\n\n`);
-    }
-    if (!body.includes(EXECUTION_LINE)) {
-      if (/^# .+$/m.test(body)) body = body.replace(/^(# .+)\n+/m, `$1\n\n${EXECUTION_LINE}.\n\n`);
-      else body = `\n${EXECUTION_LINE}.\n${body}`;
-    }
-    text = `---\n${frontmatter.trim()}\n---\n${body}`;
-    writeFileSync(path, text);
-  }
-  const playbooks = join(repo, "skills/poteto-mode/playbooks");
-  if (existsSync(playbooks)) {
-    for (const name of readdirSync(playbooks).filter((entry) => entry.endsWith(".md"))) {
-      const path = join(playbooks, name);
-      let text = readFileSync(path, "utf8");
-      if (!text.includes(PLAYBOOK_CONTRACT)) {
-        const instruction = `Follow [the Pi execution contract](${PLAYBOOK_CONTRACT}).`;
-        text = /^### .+$/m.test(text)
-          ? text.replace(/^(### .+)\n+/m, `$1\n\n${instruction}\n\n`)
-          : `${instruction}\n\n${text}`;
-      }
-      writeFileSync(path, text);
-    }
-  }
-}
-
-function generatedProblems(root, source, provenance) {
+function mirrorProblems(root, source, provenance) {
   const problems = [];
-  const skillsRoot = join(root, "skills");
-  if (!existsSync(skillsRoot)) return ["Missing generated skills/ directory"];
-  const adapter = readFileSync(join(ROOT, ADAPTER), "utf8");
-  const { skills, classes } = classifySkills(skillsRoot);
-  const users = new Map();
-  for (const [skill, { usesCursorNames }] of classes) {
-    const text = readFileSync(join(skillsRoot, skill, "SKILL.md"), "utf8");
-    if (!new RegExp(`^---\\n[\\s\\S]*?^name: ${skill}$[\\s\\S]*?\\n---\\n`, "m").test(text)) {
-      problems.push(`skills/${skill}/SKILL.md frontmatter name does not match '${skill}'`);
-    }
-    if (!text.includes(EXECUTION_LINE)) {
-      problems.push(`skills/${skill}/SKILL.md is missing the Pi execution contract`);
-    }
-    const frontmatter = text.match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? "";
-    const disabled = /^disable-model-invocation:\s*true\s*$/m.test(frontmatter);
-    if (disabled === advertised(skill)) {
-      problems.push(`skills/${skill}/SKILL.md has incorrect Pi model discovery`);
-    }
-    for (const key of usesCursorNames) users.set(key, [...(users.get(key) ?? []), skill]);
-  }
-  const playbooks = join(skillsRoot, "poteto-mode/playbooks");
-  if (existsSync(playbooks)) {
-    for (const name of readdirSync(playbooks).filter((entry) => entry.endsWith(".md"))) {
-      if (!readFileSync(join(playbooks, name), "utf8").includes(PLAYBOOK_CONTRACT)) {
-        problems.push(`skills/poteto-mode/playbooks/${name} is missing the Pi execution contract`);
-      }
-    }
-  }
-  for (const [key, using] of users) if (!adapter.includes(key)) {
-    problems.push(`Pi adapter (${ADAPTER}) has no row for ${key}, used by ${using.join(", ")}`);
-  }
   for (const agent of ["poteto-agent.md", "comment-sicko.md"]) {
     if (!existsSync(join(root, "agents", agent))) problems.push(`Missing agents/${agent}`);
   }
@@ -319,14 +180,30 @@ function relativeSourceTarget(source, from, href) {
 }
 
 function isShipped(root, target) {
-  return (target === ADAPTER || OUTPUTS.some((path) => target === path || target.startsWith(`${path}/`))) &&
-    (target === ADAPTER || existsSync(join(root, target)));
+  return OUTPUTS.some((path) => target === path || target.startsWith(`${path}/`)) &&
+    existsSync(join(root, target));
+}
+
+function rewriteLinks(repo, commit) {
+  const pinned = new RegExp(`https://github\\.com/cursor/plugins/(blob|tree)/(?:main|${commit})/pstack/`, "g");
+  for (const path of OUTPUTS.slice(0, 2).flatMap((dir) => existsSync(join(repo, dir)) ? walk(join(repo, dir)) : [])) {
+    if (!path.endsWith(".md")) continue;
+    const rel = relative(repo, path).split("\\").join("/");
+    let text = readFileSync(path, "utf8").replace(pinned, `${REPOSITORY}/$1/${commit}/pstack/`);
+    text = text.replace(LINK, (link, href) => {
+      const target = relativeSourceTarget(repo, rel, href);
+      if (!target || isShipped(repo, target)) return link;
+      const kind = statSync(join(repo, target)).isDirectory() ? "tree" : "blob";
+      return `](${REPOSITORY}/${kind}/${commit}/pstack/${target}${href.slice(href.search(/[#?]|$/))})`;
+    });
+    writeFileSync(path, text);
+  }
 }
 
 function checkTree(root, sourceRepo) {
   const provenance = JSON.parse(readFileSync(join(root, "upstream.json"), "utf8"));
   const source = join(root, VENDOR);
-  const temp = mkdtempSync(join(tmpdir(), "pi-pstack-render-"));
+  const temp = mkdtempSync(join(tmpdir(), "pi-better-pstack-render-"));
   try {
     const tree = makeRepository(temp, source, provenance, !existsSync(join(root, ".git")));
     const problems = [];
@@ -340,37 +217,13 @@ function checkTree(root, sourceRepo) {
     if (plugin.version !== provenance.version || pkg.version !== provenance.version) {
       problems.push("package.json, vendored plugin.json, and upstream.json versions differ");
     }
-    applyOverlay(temp, join(root, OVERLAY));
+    rewriteLinks(temp, provenance.pstackCommitSha);
     problems.push(...compareTrees(temp, root, OUTPUTS, ignoredOutputs(root, temp)));
-    problems.push(...generatedProblems(temp, source, provenance));
+    problems.push(...mirrorProblems(temp, source, provenance));
     if (problems.length) throw new Error(problems.join("\n"));
-    return { provenance, skills: classifySkills(join(temp, "skills")).skills.length };
-  } finally {
-    rmSync(temp, { recursive: true, force: true });
-  }
-}
-
-function recordOverlay() {
-  const temp = mkdtempSync(join(tmpdir(), "pi-pstack-record-"));
-  try {
-    const provenance = JSON.parse(readFileSync(join(ROOT, "upstream.json"), "utf8"));
-    const tree = makeRepository(temp, join(ROOT, VENDOR), provenance, !existsSync(join(ROOT, ".git")));
-    if (tree !== provenance.pstackTreeSha) throw new Error("Vendored source does not match upstream.json; do not record an overlay against it.");
-    commitIndex(temp, "Pinned upstream");
-    if (!existsSync(join(ROOT, ".git"))) applyOverlay(temp, join(ROOT, OVERLAY));
-    const ignored = ignoredOutputs(ROOT, temp);
-    for (const path of OUTPUTS) {
-      rmSync(join(temp, path), { recursive: true, force: true });
-      cpSync(join(ROOT, path), join(temp, path), { recursive: true, verbatimSymlinks: true,
-        filter: (source) => !ignored.has(relative(ROOT, source).split("\\").join("/")) });
-    }
-    git(temp, ["add", "--force", "--all"]);
-    const patch = git(temp, ["diff", "--cached", "--binary", "--full-index", "HEAD"]).stdout;
-    const path = join(ROOT, OVERLAY);
-    const pending = `${path}.new`;
-    writeFileSync(pending, patch);
-    renameSync(pending, path);
-    console.log(`Recorded Pi changes in ${OVERLAY}. Review the generated diff and run npm run check:sync.`);
+    const skills = readdirSync(join(root, "skills")).filter((name) =>
+      existsSync(join(root, "skills", name, "SKILL.md"))).length;
+    return { provenance, skills };
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -405,19 +258,17 @@ function hashFile(path) {
   return hash("sha256", readFileSync(path), "hex");
 }
 
-function changes(repo, base, upstream, overlay) {
-  const adapted = new Set(git(repo, ["diff", "--name-only", "-z", base, overlay]).stdout.split("\0").filter(Boolean));
+function changes(repo, base, upstream) {
   const parts = git(repo, ["diff", "--name-status", "--find-renames", "-z", base, upstream]).stdout.split("\0");
   const changes = [];
-  for (let index = 0; index < parts.length && parts[index];) {
+  for (let index = 0; parts[index];) {
     const status = parts[index++];
     const oldPath = /^[RC]/.test(status) ? parts[index++] : undefined;
     const path = parts[index++];
     const top = path.split("/")[0];
     const shipped = OUTPUTS.includes(top);
-    const knownReference = [".cursor-plugin", ".gitignore", "README.md", "assets", "automations", "docs"].includes(top);
+    const knownReference = KNOWN_REFERENCE.includes(top);
     changes.push({ status, ...(oldPath ? { oldPath } : {}), path,
-      adapted: adapted.has(path) || (oldPath ? adapted.has(oldPath) : false),
       classification: shipped ? "shipped" : knownReference || !status.startsWith("A") ? "source-only" : null });
   }
   return changes;
@@ -436,52 +287,28 @@ function stageSync(source) {
   const tree = makeRepository(repo, join(ROOT, VENDOR), current, !existsSync(join(ROOT, ".git")));
   if (tree !== current.pstackTreeSha) throw new Error("Vendored tree changed while staging; no generated files were written.");
   const base = commitIndex(repo, "Pinned upstream");
-  git(repo, ["switch", "--quiet", "-c", "pi-rendering"]);
-  applyOverlay(repo, join(ROOT, OVERLAY));
-  const overlay = commitIndex(repo, "Pi rendering");
-  git(repo, ["switch", "--quiet", "-c", "incoming-upstream", base]);
+  git(repo, ["switch", "--quiet", "-c", "incoming-upstream"]);
   for (const name of readdirSync(repo)) if (name !== ".git") rmSync(join(repo, name), { recursive: true, force: true });
   checkoutTree(source, incoming.pstackTreeSha, repo, join(STAGE, "source.index"));
   git(repo, ["add", "--force", "--all"]);
-  const upstream = commitIndex(repo, "Incoming upstream");
-  if (gitText(repo, "rev-parse", `${upstream}^{tree}`) !== incoming.pstackTreeSha) {
-    throw new Error("Checked-out upstream tree does not match its Git tree; no generated files were written.");
+  const staged = gitText(repo, "write-tree");
+  if (staged !== incoming.pstackTreeSha) {
+    throw new Error(`Staged tree ${staged} does not match upstream ${incoming.pstackTreeSha}; no generated files were written.`);
   }
-  git(repo, ["switch", "--quiet", "pi-rendering"]);
-  const merge = git(repo, ["merge", "--no-commit", "--no-ff", "incoming-upstream"], { allow: [0, 1] });
-  const conflicts = git(repo, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim();
-  if (merge.status !== 0 && !conflicts) throw new Error(`Could not stage upstream merge:\n${merge.stderr || merge.stdout}`);
-  const metadata = { current, incoming, base, overlay, upstream,
-    overlayHash: hashFile(join(ROOT, OVERLAY)), provenanceHash: hashFile(join(ROOT, "upstream.json")) };
-  const review = { changes: changes(repo, base, upstream, overlay), approvedSkillRemovals: [] };
+  const upstream = commitIndex(repo, "Incoming upstream");
+  const metadata = { current, incoming, base, upstream,
+    provenanceHash: hashFile(join(ROOT, "upstream.json")) };
+  const review = { changes: changes(repo, base, upstream), approvedSkillRemovals: [] };
   writeFileSync(join(STAGE, "metadata.json"), `${JSON.stringify(metadata, null, 2)}\n`);
   writeFileSync(join(STAGE, "review.json"), `${JSON.stringify(review, null, 2)}\n`);
   console.log(`Staged upstream ${current.pstackCommitSha.slice(0, 7)} -> ${incoming.pstackCommitSha.slice(0, 7)} in ${repo}.`);
   for (const change of review.changes) {
     console.log(`${change.status} ${change.oldPath ? `${change.oldPath} -> ` : ""}${change.path}` +
-      ` [${change.classification ?? "unclassified"}${change.adapted ? ", adapted" : ""}]`);
+      ` [${change.classification ?? "unclassified"}]`);
   }
   console.log(`Review every upstream change: git -C ${repo} diff ${base} ${upstream}`);
-  console.log(`Review the Pi rendering: git -C ${repo} diff --cached ${upstream}`);
   console.log(`Classify unknown additions and approve intentional skill removals in ${join(STAGE, "review.json")}.`);
-  console.log(`Resolve conflicts in ${repo}, git add the resolutions, then run npm run sync -- --continue.`);
-  if (conflicts) throw new Error(`Unresolved upstream conflicts:\n${conflicts}`);
-}
-
-function rewriteLinks(repo, oldCommit, newCommit) {
-  const oldOrMain = new RegExp(`https://github\\.com/cursor/plugins/(blob|tree)/(?:main|${oldCommit})/pstack/`, "g");
-  for (const path of OUTPUTS.slice(0, 2).flatMap((dir) => existsSync(join(repo, dir)) ? walk(join(repo, dir)) : [])) {
-    if (!path.endsWith(".md")) continue;
-    const rel = relative(repo, path).split("\\").join("/");
-    let text = readFileSync(path, "utf8").replace(oldOrMain, `${REPOSITORY}/$1/${newCommit}/pstack/`);
-    text = text.replace(LINK, (link, href) => {
-      const target = relativeSourceTarget(repo, rel, href);
-      if (!target || isShipped(repo, target)) return link;
-      const kind = statSync(join(repo, target)).isDirectory() ? "tree" : "blob";
-      return `](${REPOSITORY}/${kind}/${newCommit}/pstack/${target}${href.slice(href.search(/[#?]|$/))})`;
-    });
-    writeFileSync(path, text);
-  }
+  console.log(`Then run npm run sync -- --continue.`);
 }
 
 function shippedSkills(root) {
@@ -521,23 +348,17 @@ function continueSync() {
   const metadata = JSON.parse(readFileSync(join(STAGE, "metadata.json"), "utf8"));
   const review = JSON.parse(readFileSync(join(STAGE, "review.json"), "utf8"));
   checkTree(ROOT);
-  if (hashFile(join(ROOT, OVERLAY)) !== metadata.overlayHash || hashFile(join(ROOT, "upstream.json")) !== metadata.provenanceHash) {
-    throw new Error("The checked-out overlay or provenance changed since staging; start a new sync instead of overwriting it.");
+  if (hashFile(join(ROOT, "upstream.json")) !== metadata.provenanceHash) {
+    throw new Error("upstream.json changed since staging; start a new sync instead of overwriting it.");
   }
   if (gitText(repo, "rev-parse", `${metadata.upstream}^{tree}`) !== metadata.incoming.pstackTreeSha) {
     throw new Error("The staged upstream tree no longer matches its recorded provenance.");
   }
-  const expectedChanges = changes(repo, metadata.base, metadata.upstream, metadata.overlay);
-  const identity = ({ status, oldPath, path, adapted }) => ({ status, oldPath, path, adapted });
+  const expectedChanges = changes(repo, metadata.base, metadata.upstream);
+  const identity = ({ status, oldPath, path }) => ({ status, oldPath, path });
   if (!Array.isArray(review.changes) ||
       JSON.stringify(review.changes.map(identity)) !== JSON.stringify(expectedChanges.map(identity))) {
     throw new Error("The review report no longer lists every upstream change. Restore its change inventory before continuing.");
-  }
-  const unresolved = git(repo, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim();
-  if (unresolved) throw new Error(`Resolve and git add these conflicts first:\n${unresolved}`);
-  if (git(repo, ["diff", "--quiet"], { allow: [0, 1] }).status ||
-      git(repo, ["ls-files", "--others", "--exclude-standard"]).stdout.trim()) {
-    throw new Error(`Stage all reviewed changes with git -C ${repo} add before continuing.`);
   }
   const unclassified = review.changes.filter((change) => !["shipped", "source-only"].includes(change.classification));
   if (unclassified.length) throw new Error(`Classify upstream additions in ${join(STAGE, "review.json")}:\n${unclassified.map(({ path }) => path).join("\n")}`);
@@ -547,22 +368,19 @@ function continueSync() {
   const removed = shippedSkills(ROOT).filter((skill) => !shippedSkills(repo).includes(skill));
   const unapproved = removed.filter((skill) => !review.approvedSkillRemovals.includes(skill));
   if (unapproved.length) throw new Error(`Refusing to remove shipped skills without approval: ${unapproved.join(", ")}. Restore them in ${repo} or record approved removals in ${join(STAGE, "review.json")}.`);
-  adaptSkillEntries(repo);
-  rewriteLinks(repo, metadata.current.pstackCommitSha, metadata.incoming.pstackCommitSha);
-  git(repo, ["add", "--force", "--all"]);
-  const patch = git(repo, ["diff", "--cached", "--binary", "--full-index", metadata.upstream]).stdout;
   const candidate = join(STAGE, "candidate");
   mkdirSync(candidate, { recursive: true });
   checkoutTree(repo, metadata.incoming.pstackTreeSha, join(candidate, VENDOR), join(STAGE, "candidate.index"));
+  // Link rewriting needs the full upstream tree to resolve links into omitted
+  // paths, so it runs on the staged worktree before OUTPUTS are copied out.
+  rewriteLinks(repo, metadata.incoming.pstackCommitSha);
   for (const path of OUTPUTS) cpSync(join(repo, path), join(candidate, path), { recursive: true, verbatimSymlinks: true });
-  mkdirSync(join(candidate, "pi/overlays"), { recursive: true });
-  writeFileSync(join(candidate, OVERLAY), patch);
   writeFileSync(join(candidate, "upstream.json"), `${JSON.stringify(metadata.incoming, null, 2)}\n`);
   const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   pkg.version = metadata.incoming.version;
   writeFileSync(join(candidate, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
   checkTree(candidate);
-  publish(candidate, [...OUTPUTS, VENDOR, OVERLAY, "package.json", "upstream.json"]);
+  publish(candidate, [...OUTPUTS, VENDOR, "package.json", "upstream.json"]);
   rmSync(STAGE, { recursive: true, force: true });
   console.log(`Published the reviewed pstack candidate at ${metadata.incoming.pstackCommitSha} (tree ${metadata.incoming.pstackTreeSha}, v${metadata.incoming.version}).`);
 }
@@ -572,22 +390,21 @@ const explicitSource = args.find((arg) => !arg.startsWith("--"));
 let clone;
 try {
   if (args.includes("--continue")) continueSync();
-  else if (args.includes("--record")) recordOverlay();
   else if (args.includes("--check")) {
     const { provenance, skills } = checkTree(ROOT, explicitSource ? resolvePath(explicitSource) : undefined);
-    console.log(`pi-pstack offline check passed (${skills} skills, 2 agents; upstream ${provenance.pstackCommitSha.slice(0, 7)}).`);
+    console.log(`pi-better-pstack offline check passed (${skills} skills; upstream ${provenance.pstackCommitSha.slice(0, 7)}).`);
   } else {
     let source = explicitSource ? resolvePath(explicitSource) : undefined;
     if (!source && args.includes("--fetch")) {
-      clone = mkdtempSync(join(tmpdir(), "pi-pstack-upstream-"));
+      clone = mkdtempSync(join(tmpdir(), "pi-better-pstack-upstream-"));
       git(clone, ["clone", "--filter=blob:none", "--no-checkout", `${REPOSITORY}.git`, "."]);
       source = clone;
     }
-    if (!source) throw new Error("Usage: node scripts/sync-pstack.mjs <cursor-plugins-dir> | --fetch | --continue | --record | --check [cursor-plugins-dir]");
+    if (!source) throw new Error("Usage: node scripts/sync-pstack.mjs <cursor-plugins-dir> | --fetch | --continue | --check [cursor-plugins-dir]");
     stageSync(source);
   }
 } catch (error) {
-  console.error(`pi-pstack sync: ${error.message}`);
+  console.error(`pi-better-pstack sync: ${error.message}`);
   process.exitCode = 1;
 } finally {
   if (clone) rmSync(clone, { recursive: true, force: true });

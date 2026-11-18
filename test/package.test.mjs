@@ -54,53 +54,13 @@ test("sync-pstack --check passes and all skills have valid normalized frontmatte
   }
 });
 
-test("adapted agents include valid pi-subagents frontmatter and ponytail protection", () => {
+test("mirrored agents carry pristine upstream frontmatter", () => {
   const potetoAgent = readFileSync(path.join(agentsDir, "poteto-agent.md"), "utf8");
   assert.match(potetoAgent, /^name: poteto-agent$/m);
+  assert.match(potetoAgent, /^is_background: true$/m);
   assert.doesNotMatch(potetoAgent, /^(?:model|fallbackModels):/m);
-  assert.match(potetoAgent, /docs\/harness\/pi\.md/);
 
   const commentSicko = readFileSync(path.join(agentsDir, "comment-sicko.md"), "utf8");
   assert.match(commentSicko, /^name: comment-sicko$/m);
   assert.doesNotMatch(commentSicko, /^(?:model|fallbackModels):/m);
-  assert.match(commentSicko, /docs\/harness\/pi\.md/);
-  assert.match(commentSicko, /ponytail:/);
-});
-
-test("qualify-hosts --check-cache rejects partial caches and build refuses unowned non-empty directories", (t) => {
-  const tempRoot = mkdtempSync(path.join(tmpdir(), "pi-pstack-cache-test-"));
-  t.after(() => rmSync(tempRoot, { recursive: true, force: true }));
-
-  const script = path.join(root, "scripts", "qualify-hosts.mjs");
-  const missingDir = path.join(tempRoot, "missing");
-  assert.equal(
-    spawnSync(process.execPath, [script, "--check-cache"], {
-      cwd: root,
-      env: { ...process.env, PI_PSTACK_HOSTS_CACHE_DIR: missingDir },
-    }).status,
-    1,
-  );
-
-  const partialDir = path.join(tempRoot, "partial");
-  mkdirSync(partialDir, { recursive: true });
-  writeFileSync(path.join(partialDir, ".pi-pstack-hosts-owner"), "pi-pstack qualify-hosts cache\n");
-  assert.equal(
-    spawnSync(process.execPath, [script, "--check-cache"], {
-      cwd: root,
-      env: { ...process.env, PI_PSTACK_HOSTS_CACHE_DIR: partialDir },
-    }).status,
-    1,
-  );
-
-  const unownedDir = path.join(tempRoot, "unowned");
-  mkdirSync(unownedDir, { recursive: true });
-  writeFileSync(path.join(unownedDir, "keep.txt"), "user file\n");
-  const refused = spawnSync(process.execPath, [script], {
-    cwd: root,
-    encoding: "utf8",
-    env: { ...process.env, PI_PSTACK_HOSTS_CACHE_DIR: unownedDir },
-  });
-  assert.notEqual(refused.status, 0);
-  assert.match(refused.stderr, /Refusing to replace non-empty unowned directory/);
-  assert.equal(readFileSync(path.join(unownedDir, "keep.txt"), "utf8"), "user file\n");
 });

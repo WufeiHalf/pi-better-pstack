@@ -1,14 +1,13 @@
 ---
 name: typescript-best-practices
-description: TypeScript best practices for types, signatures, and validation. Use when writing, refactoring, or reviewing .ts or .tsx code.
+description: TypeScript best practices. Use when reading or editing any .ts or .tsx file.
 paths: ["**/*.ts", "**/*.tsx"]
+disable-model-invocation: true
 ---
 
 # TypeScript best practices
 
-Read [the Pi execution contract](../../docs/harness/pi.md).
-
-Apply the [type-system-discipline](../principle-type-system-discipline/SKILL.md) principle skill first.
+Apply the **type-system-discipline** principle skill first.
 
 | Rule | Summary |
 |------|---------|

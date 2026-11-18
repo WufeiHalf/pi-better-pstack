@@ -1,15 +1,17 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { replaceControlCharacters, stripTerminalSequences } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
-import { registerOpinionRenderer } from "./opinion-renderer.js";
 
 const PACKAGE_ROOT = join(import.meta.dirname, "..");
 const UPSTREAM_FILE = join(PACKAGE_ROOT, "upstream.json");
+const SKILL_FILE = join(PACKAGE_ROOT, "skills", "poteto-mode", "SKILL.md");
+const CONTRACT_FILE = join(PACKAGE_ROOT, "docs", "harness", "pi.md");
+const SHEET_FILE = () => join(getAgentDir(), "pstack-models.md");
 const CHECK_TTL_MS = 6 * 60 * 60 * 1000;
 const API_URL = "https://api.github.com/repos/cursor/plugins/commits?path=pstack&per_page=1";
+const PRESET_PROVIDER = "pstack";
+const PRESET_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 
 function safeLine(value) {
   return replaceControlCharacters(stripTerminalSequences(String(value ?? "")));
@@ -31,8 +33,50 @@ function ownsSkill(command, name) {
   }
 }
 
+/**
+ * The alias sheet at <agentDir>/pstack-models.md, one preset per line:
+ * `fable: provider/modelId @level`. Lines that do not parse are ignored.
+ */
+function readModelSheet() {
+  const file = SHEET_FILE();
+  if (!existsSync(file)) return [];
+  const presets = [];
+  for (const raw of readFileSync(file, "utf8").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const match = /^([a-z][a-z0-9-]*):\s*(\S+)(?:\s*@([a-z]+))?\s*$/i.exec(line);
+    if (!match) continue;
+    const slash = match[2].indexOf("/");
+    if (slash <= 0) continue;
+    presets.push({
+      alias: match[1],
+      provider: match[2].slice(0, slash),
+      modelId: match[2].slice(slash + 1),
+      level: match[3] ?? "high",
+    });
+  }
+  return presets;
+}
+
+function registerPresets(pi, presets) {
+  for (const preset of presets) {
+    const { alias, provider, modelId, level } = preset;
+    pi.registerVirtualModel({
+      provider: PRESET_PROVIDER,
+      id: alias,
+      name: alias,
+      thinkingLevels: PRESET_LEVELS,
+      route(request, ctx) {
+        const model = ctx.modelRegistry.find(provider, modelId);
+        if (!model) throw new Error(`pstack preset ${alias} routes to ${provider}/${modelId}, which is not configured.`);
+        return { model, thinkingLevel: request.thinkingLevel ?? level };
+      },
+    });
+  }
+}
+
 function getCachePath() {
-  return join(getAgentDir(), "cache", "pi-pstack-upstream.json");
+  return join(getAgentDir(), "cache", "pi-better-pstack-upstream.json");
 }
 
 function readJsonSafe(filePath) {
@@ -44,9 +88,10 @@ function readJsonSafe(filePath) {
   }
 }
 
+
 function writeJsonSafe(filePath, data) {
   try {
-    mkdirSync(dirname(filePath), { recursive: true });
+    mkdirSync(join(filePath, ".."), { recursive: true });
     writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   } catch {
     // Cache writes are best-effort.
@@ -58,7 +103,7 @@ async function fetchLatestUpstreamCommit(signal) {
     const response = await fetch(API_URL, {
       headers: {
         Accept: "application/vnd.github+json",
-        "User-Agent": "pi-pstack-update-checker",
+        "User-Agent": "pi-better-pstack-update-checker",
       },
       signal,
     });
@@ -79,48 +124,26 @@ async function fetchLatestUpstreamCommit(signal) {
   }
 }
 
-/** Replays the branch's recorded tool loadout (Pi docs/session-format.md) for one tool. */
-function removedOnBranch(ctx, name) {
-  let removed = false;
-  for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type !== "message" || entry.message.role !== "system") continue;
-    if (entry.message.toolsRemoved?.some((tool) => tool.name === name)) removed = true;
-    if (entry.message.toolsAdded?.some((tool) => tool.name === name)) removed = false;
-  }
-  return removed;
-}
-
-/**
- * Pi's own MCP extension activates tool_search when it registers deferred tools, since only
- * tool_search declares them. Only a registered tool_search that reaches other tools qualifies.
- * Pi restores each branch's recorded loadout before session_start and session_tree; a branch
- * that recorded removing tool_search keeps it off, as Pi keeps any recorded removal.
- */
-function activateToolSearch(pi, ctx) {
-  const active = pi.getActiveTools();
-  if (!active.includes("tool_search") &&
-      pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.reachesTools !== undefined) &&
-      !removedOnBranch(ctx, "tool_search")) {
-    pi.setActiveTools([...active, "tool_search"]);
-  }
-}
-
-/** Whether the agent can call pstack_opinion: it is declared, or an active tool_search or codemode reaches it. */
-function opinionReachable(pi) {
-  const tools = pi.getAllTools();
-  const active = pi.getActiveTools();
-  return !tools.some((tool) => tool.name === "pstack_opinion") || active.includes("pstack_opinion") ||
-    tools.some((tool) => (tool.name === "tool_search" || tool.name === "codemode") &&
-      tool.reachesTools !== undefined && active.includes(tool.name));
-}
+const stickyMessage = (contractAliases) => [
+  "pstack-mode reminder for this run:",
+  "1. The matched playbook's steps are visible as your checklist, verbatim, each done or with `skip: <reason>`.",
+  "2. Code-writing steps go through the Agent tool (`subagent_type: \"poteto-agent\"`, background, explicit model" +
+    (contractAliases ? " alias" : "") + ").",
+  "3. You verified the result on the real artifact before reporting done.",
+  contractAliases
+    ? `Configured model presets: ${contractAliases}.`
+    : "No model presets are configured; omit model so children inherit the parent model.",
+  "The full skill text and the Pi execution contract are in your system prompt.",
+].join("\n");
 
 export default function piPstackExtension(pi) {
-  registerOpinionRenderer(pi);
   let activeController;
   let modeEnabled = false;
   let modeRequested = false;
   let runOptions;
   let turnCount = 0;
+
+  registerPresets(pi, readModelSheet());
 
   const modeAvailable = () => ownsSkill(
     pi.getCommands().find((entry) => entry.name === "skill:poteto-mode"),
@@ -143,23 +166,11 @@ export default function piPstackExtension(pi) {
     updateModeStatus(ctx);
   };
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", (event, ctx) => {
     restoreMode(ctx);
-    activateToolSearch(pi, ctx);
   });
   pi.on("session_tree", (_event, ctx) => {
     restoreMode(ctx);
-    activateToolSearch(pi, ctx);
-  });
-
-  // Like Pi's own MCP extension, warn once when nothing can reach the deferred tool. Check as a run
-  // starts: extensions that load later, such as Pi's MCP extension, can still activate tool_search
-  // or codemode in their own session_start handlers.
-  let warnedUnreachable = false;
-  pi.on("before_agent_start", (_event, ctx) => {
-    if (warnedUnreachable || opinionReachable(pi)) return;
-    warnedUnreachable = true;
-    notifyUI(ctx, "pstack_opinion is only reachable from the tool_search or codemode tool, but neither is active; it cannot be called.", "warning");
   });
 
   pi.registerCommand("pstack-mode", {
@@ -182,7 +193,11 @@ export default function piPstackExtension(pi) {
         const availability = modeEnabled && !modeAvailable() ? " (poteto-mode is excluded or unavailable)" :
           modeEnabled && runOptions?.forceSystemPrompt !== undefined ? " (system prompt is overridden)" : "";
         updateModeStatus(ctx);
-        notifyUI(ctx, `pstack mode is ${modeEnabled ? "on" : "off"}${availability}.`, "info");
+        const presets = readModelSheet();
+        const presetLine = presets.length
+          ? `Model presets: ${presets.map((p) => `${p.alias} -> ${p.provider}/${p.modelId} @${p.level}`).join(", ")}.`
+          : "No model presets configured; delegated children inherit the parent model.";
+        notifyUI(ctx, `pstack mode is ${modeEnabled ? "on" : "off"}${availability}. ${presetLine}`, "info");
         return;
       }
       if (action !== "on" && action !== "off") {
@@ -209,9 +224,31 @@ export default function piPstackExtension(pi) {
       return;
     }
     if (event.systemPromptOptions.forceSystemPrompt !== undefined) return;
-    const path = join(PACKAGE_ROOT, "skills", "poteto-mode", "SKILL.md");
-    event.systemPromptOptions.sections.pstack_mode =
-      `Persistent pstack mode is on. Follow the installed skill at ${path}:\n\n${readFileSync(path, "utf8")}`;
+    const contract = readFileSync(CONTRACT_FILE, "utf8");
+    const skill = readFileSync(SKILL_FILE, "utf8");
+    const presets = readModelSheet();
+    const aliases = presets.map((preset) => preset.alias);
+    event.systemPromptOptions.sections.pstack_mode = [
+      "Persistent pstack mode is on. The poteto-mode skill and the Pi execution contract below govern this session's code work.",
+      `This pstack package is installed at ${PACKAGE_ROOT}.`,
+      "# Pi execution contract",
+      contract.trim(),
+      "# Configured model presets",
+      aliases.length
+        ? `${aliases.join(", ")} (as configured in ${SHEET_FILE()}; pass the bare alias in the Agent call's model field).`
+        : "None. Omit model on Agent calls so children inherit the parent model.",
+      "# poteto-mode skill",
+      skill,
+    ].join("\n\n");
+    if (event.messageType === "user") {
+      return {
+        message: {
+          customType: "pstack-sticky",
+          content: stickyMessage(aliases.length ? aliases.join(", ") : ""),
+          display: true,
+        },
+      };
+    }
   });
   pi.on("turn_start", (_event, ctx) => {
     turnCount += 1;
@@ -219,62 +256,6 @@ export default function piPstackExtension(pi) {
     if (turnCount === 1 && modeRequested && runOptions.forceSystemPrompt !== undefined) {
       notifyUI(ctx, "pstack mode is on, but another extension forces the system prompt; its mode section cannot be applied.", "warning");
     }
-  });
-
-  pi.registerTool({
-    name: "pstack_opinion",
-    label: "Pstack text opinion",
-    exposure: "deferred",
-    description: "Ask one configured Pi model for a text-only opinion. Runs in the background by default in persistent Pi fork sessions; the answer arrives automatically.",
-    promptSnippet: "Request a background text-only model opinion, not a tool-using review.",
-    promptGuidelines: [
-      "Call pstack_opinion directly for background work, then continue independent work. Its receipt is not the opinion. Pi delivers the answer automatically; stopping the session cancels pending opinions.",
-      "Use pstack_opinion with background:false when a script must await the answer. Nested callers must own background execution themselves. Official Pi and one-shot print/JSON sessions default to foreground.",
-    ],
-    parameters: Type.Object({
-      model: Type.String({ description: "Exact configured provider/model ID. Pass reasoning in the separate reasoning field." }),
-      reasoning: Type.Optional(StringEnum(["minimal", "low", "medium", "high", "xhigh", "max"], {
-        description: "Reasoning level for this request. Pi handles model support.",
-      })),
-      question: Type.String({ description: "Question for the model." }),
-      context: Type.Optional(Type.String({ description: "Explicit material the model should consider." })),
-      background: Type.Optional(Type.Boolean({
-        description: "Default true in persistent Pi fork sessions. False waits for the answer. Background runs require a direct tool call and end with the session/process.",
-      })),
-    }, { additionalProperties: false }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      signal?.throwIfAborted();
-      const separator = params.model.indexOf("/");
-      if (separator <= 0 || separator === params.model.length - 1) throw new Error("Use a configured provider/model ID.");
-      const model = ctx.modelRegistry.find(params.model.slice(0, separator), params.model.slice(separator + 1));
-      if (!model) throw new Error(`Pi has no configured model ${params.model}. Use an exact provider/model ID. Pass reasoning separately, for example reasoning: "max". Choose an available model without changing global settings.`);
-      const input = params.context ? `${params.question}\n\nMaterial:\n${params.context}` : params.question;
-      const run = async (runSignal) => {
-        const response = await ctx.modelRegistry.streamSimple(model, {
-          systemPrompt: "Give a text-only opinion on the supplied material. You have no tools and cannot independently inspect files, run checks, or verify an application. Distinguish observations from uncertainty.",
-          messages: [{ role: "user", content: input, timestamp: Date.now() }],
-        }, { signal: runSignal, reasoning: params.reasoning }).result();
-        const text = response.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
-        const details = { model: params.model, stopReason: response.stopReason, kind: "text-only opinion" };
-        if (response.stopReason === "error" || response.stopReason === "aborted" || response.stopReason === "toolUse") {
-          return { content: [{ type: "text", text: response.errorMessage || `Opinion did not complete (${response.stopReason}).` }],
-            details, usage: response.usage, isError: true };
-        }
-        return { content: [{ type: "text", text: `Text-only opinion from ${params.model} (${response.stopReason}):\n${text}` }],
-          details, usage: response.usage };
-      };
-      const background = params.background ??
-        (typeof ctx.runInBackground === "function" && (ctx.mode === "tui" || ctx.mode === "rpc"));
-      if (!background) return run(signal);
-      if (typeof ctx.runInBackground !== "function") {
-        throw new Error("This Pi host has no background tool runs. Use background:false to wait for the opinion.");
-      }
-      const runId = ctx.runInBackground("pstack-opinion", run);
-      return {
-        content: [{ type: "text", text: `Opinion from ${params.model} started in the background. Run ${runId}. Continue independent work; Pi will deliver the answer automatically. Stopping, reloading, leaving the session branch, or exiting cancels it.` }],
-        details: { runId, model: params.model, kind: "text-only opinion", background: true },
-      };
-    },
   });
 
   pi.on("session_shutdown", () => {
@@ -308,7 +289,7 @@ export default function piPstackExtension(pi) {
         });
         notifyUI(
           ctx,
-          `pstack upstream has new commits in cursor/plugins (${safeLine(cached.latestSha.slice(0, 7))}: ${safeLine(cached.latestSubject ?? "updated")}). These changes may not be packaged for Pi yet. Use /pstack-status for details.`,
+          `pstack upstream has new commits in cursor/plugins (${safeLine(cached.latestSha.slice(0, 7))}: ${safeLine(cached.latestSubject ?? "updated")}). These changes may not be packaged here yet. Use /pstack-status for details.`,
           "info",
         );
       }
@@ -340,7 +321,7 @@ export default function piPstackExtension(pi) {
         if (isOutdated && !alreadyNotified) {
           notifyUI(
             ctx,
-            `pstack upstream has new commits in cursor/plugins (${latest.sha.slice(0, 7)}: ${latest.subject}). These changes may not be packaged for Pi yet. Use /pstack-status for details.`,
+            `pstack upstream has new commits in cursor/plugins (${latest.sha.slice(0, 7)}: ${latest.subject}). These changes may not be packaged here yet. Use /pstack-status for details.`,
             "info",
           );
         }
@@ -356,17 +337,17 @@ export default function piPstackExtension(pi) {
   });
 
   pi.registerCommand("pstack-status", {
-    description: "Check installed pi-pstack snapshot against upstream cursor/plugins/pstack",
+    description: "Check the installed pstack snapshot against upstream cursor/plugins/pstack",
     handler: async (_args, ctx) => {
       const upstream = readJsonSafe(UPSTREAM_FILE);
       if (!upstream) {
-        notifyUI(ctx, "pi-pstack: upstream.json is missing.", "warning");
+        notifyUI(ctx, "pi-better-pstack: upstream.json is missing.", "warning");
         return;
       }
       if (process.env.PI_OFFLINE === "1") {
         notifyUI(
           ctx,
-          `pi-pstack v${upstream.version} (pstack commit ${upstream.pstackCommitSha?.slice(0, 7)}, tree ${upstream.pstackTreeSha?.slice(0, 7)}). Offline mode active.`,
+          `pi-better-pstack v${upstream.version} (pstack commit ${upstream.pstackCommitSha?.slice(0, 7)}, tree ${upstream.pstackTreeSha?.slice(0, 7)}). Offline mode active.`,
           "info",
         );
         return;
@@ -378,7 +359,7 @@ export default function piPstackExtension(pi) {
       if (!latest) {
         notifyUI(
           ctx,
-          `pi-pstack v${upstream.version} (installed pstack commit ${upstream.pstackCommitSha?.slice(0, 7)}). Could not reach GitHub API.`,
+          `pi-better-pstack v${upstream.version} (installed pstack commit ${upstream.pstackCommitSha?.slice(0, 7)}). Could not reach GitHub API.`,
           "warning",
         );
         return;
@@ -394,13 +375,13 @@ export default function piPstackExtension(pi) {
       if (latest.sha === upstream.pstackCommitSha) {
         notifyUI(
           ctx,
-          `pi-pstack is up to date with cursor/plugins/pstack (${latest.sha.slice(0, 7)}, v${upstream.version}).`,
+          `pi-better-pstack is up to date with cursor/plugins/pstack (${latest.sha.slice(0, 7)}, v${upstream.version}).`,
           "info",
         );
       } else {
         notifyUI(
           ctx,
-          `pi-pstack upstream update available: installed ${upstream.pstackCommitSha?.slice(0, 7)} -> latest ${latest.sha.slice(0, 7)} (${latest.subject}). These changes need a reviewed Pi sync before they are installable. Check https://github.com/fitchmultz/pi-pstack/pulls. Pi's package update notice reports installable fork updates.`,
+          `pi-better-pstack upstream update available: installed ${upstream.pstackCommitSha?.slice(0, 7)} -> latest ${latest.sha.slice(0, 7)} (${latest.subject}). These changes need a reviewed sync before they are installable.`,
           "info",
         );
       }
