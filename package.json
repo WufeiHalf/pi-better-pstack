@@ -1,6 +1,6 @@
 {
   "name": "pi-better-pstack",
-  "version": "0.15.36",
+  "version": "0.15.46",
   "private": true,
   "description": "Pi package for cursor/plugins/pstack: pristine upstream mirror with a mandatory Pi execution contract, mode injection, and configurable fable/opus/sonnet/haiku model presets.",
   "type": "module",

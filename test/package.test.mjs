@@ -54,13 +54,13 @@ test("sync-pstack --check passes and all skills have valid normalized frontmatte
   }
 });
 
-test("mirrored agents carry pristine upstream frontmatter", () => {
+test("mirrored agents stay byte-identical to the vendored upstream mirror", () => {
+  for (const name of ["poteto-agent.md", "comment-sicko.md"]) {
+    const shipped = readFileSync(path.join(agentsDir, name), "utf8");
+    const vendored = readFileSync(path.join(root, "vendor", "pstack", "agents", name), "utf8");
+    assert.equal(shipped, vendored, `${name} must mirror upstream exactly`);
+    assert.match(shipped, new RegExp(`^name: ${name.replace(/\.md$/, "")}$`, "m"));
+  }
   const potetoAgent = readFileSync(path.join(agentsDir, "poteto-agent.md"), "utf8");
-  assert.match(potetoAgent, /^name: poteto-agent$/m);
   assert.match(potetoAgent, /^is_background: true$/m);
-  assert.doesNotMatch(potetoAgent, /^(?:model|fallbackModels):/m);
-
-  const commentSicko = readFileSync(path.join(agentsDir, "comment-sicko.md"), "utf8");
-  assert.match(commentSicko, /^name: comment-sicko$/m);
-  assert.doesNotMatch(commentSicko, /^(?:model|fallbackModels):/m);
 });
