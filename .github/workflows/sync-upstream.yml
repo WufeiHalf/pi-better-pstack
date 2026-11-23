@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      issues: write
     outputs:
       changed: ${{ steps.check.outputs.changed }}
       upstream_sha: ${{ steps.check.outputs.upstream_sha }}
@@ -44,6 +45,15 @@ jobs:
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+      - name: Close stale review issues when the mirror is current
+        if: steps.check.outputs.changed == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          for NUMBER in $(gh issue list --state open --search "Upstream pstack sync needs review in:title" --json number --jq '.[].number'); do
+            gh issue close "$NUMBER" --comment "The mirror is now current; this review request is resolved."
+          done
       - name: Install verification prerequisites
         if: steps.check.outputs.changed == 'true'
         run: |
