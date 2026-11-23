@@ -4,7 +4,7 @@ cursor 官方 [pstack](https://github.com/cursor/plugins) 在 Pi 上的发行包
 
 ## 与上游的关系
 
-`skills/`、`agents/`、`LICENSE`、`plugin.json` 是 cursor/plugins/pstack 的逐字节镜像（链接改写除外：指向未发布上游路径的相对链接会改写为 pinned GitHub 绝对链接）。上游没有任何 Pi 适配补丁，因此 Claude Code 侧怎么写，这里就是什么。同步机制保留上游溯源（`upstream.json` + `vendor/pstack`），每 6 小时 CI 轮询上游，有变化就开一个可评审的 sync PR。
+`skills/`、`agents/`、`LICENSE`、`plugin.json` 是 cursor/plugins/pstack 的逐字节镜像（链接改写除外：指向未发布上游路径的相对链接会改写为 pinned GitHub 绝对链接）。上游没有任何 Pi 适配补丁，因此 Claude Code 侧怎么写，这里就是什么。同步机制保留上游溯源（`upstream.json` + `vendor/pstack`），每 6 小时 CI 轮询上游：有变化就 stage、跑 `check:compat` 验证，通过则自动合并 PR（全盘接受上游），失败则开 issue 等人处理；合并后可用 `git revert` 回滚任一同步点。
 
 ## 强制层（全部在扩展里，技能文本零改动）
 

@@ -66,6 +66,11 @@ jobs:
         run: |
           set -eu
           node scripts/sync-pstack.mjs "$RUNNER_TEMP/cursor-plugins"
+          # 全盘接受上游：上游删除的技能在此自动批准，安全性由 check:compat
+          # 的 requiredSkills 基线把关；基线缺失会导致验证失败并开 issue。
+          jq '.approvedSkillRemovals = ([.changes[] | select(.status == "D" and ((.path // "") | test("^skills/[^/]+/SKILL\\.md$"))) | (.path | sub("^skills/(?<n>[^/]+)/SKILL\\.md$"; "\(.n)"))] | unique)' \
+            .pstack-sync/review.json > .pstack-sync/review.auto.json
+          mv .pstack-sync/review.auto.json .pstack-sync/review.json
           cp .pstack-sync/review.json "$RUNNER_TEMP/pstack-review.json"
           node scripts/sync-pstack.mjs --continue
           npm run check:compat
@@ -128,13 +133,16 @@ jobs:
           {
             echo "Upstream pstack commit: \`$UPSTREAM_SHA\`."
             echo
-            echo "Review every upstream change and each adapted section, including clean merges."
-            echo "The candidate was validated in a separate read-only job."
+            echo "Auto-merged: the candidate passed check:compat in a read-only job."
+            echo "Rollback is git revert of this merge on main."
             echo
             echo "### Upstream changes"
             jq -r '.changes[] | "- \(.status) \(if .oldPath then .oldPath + " -> " else "" end)\(.path) [\(.classification)\(if .adapted then ", adapted" else "" end)]"' "$RUNNER_TEMP/pstack-candidate/pstack-review.json"
           } > "$RUNNER_TEMP/pstack-pr.md"
           gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/pstack-pr.md"
+          # 全盘接受上游：验证通过即自动合并，PR 仅留审计轨迹。
+          # 回退路径：git revert 该合并提交，或重置 main 到上一个同步点。
+          gh pr merge "$BRANCH" --merge --delete-branch
 
   report-failure:
     needs: prepare

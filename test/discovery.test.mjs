@@ -403,7 +403,18 @@ test("packed pstack loads and routes workflows with or without delegation", asyn
     });
     // Issue #7: exercise the real native command expander, not source-text equality
     // or a paid model. Public followUp queues expanded input without inference.
-    await t.test("native SDK expands synced formal skills and sharpen without inference", () => {
+    // Markers come from the packed files at runtime so upstream text edits do not
+    // trip this test; it verifies the expansion mechanism, not the content.
+    const bodyMarker = (name) => {
+      const source = readFileSync(join(packedRoot, "skills", name, "SKILL.md"), "utf8");
+      const body = source.replace(/^[\s\S]*?\n---\n/, "");
+      const line = body.split("\n").map((l) => l.trim()).find((l) => l.length >= 40 && !l.startsWith("#"));
+      assert.ok(line, `${name} has no marker-length body line`);
+      return line;
+    };
+    const expansionCases = ["create-formal-verification-skill", "maintain-formal-verification-skill", "sharpen"]
+      .map((name) => [name, bodyMarker(name)]);
+    await t.test("native SDK expands synced skills without inference", () => {
       execFileSync(process.execPath, ["--input-type=module", "-e", `
         import assert from "node:assert/strict";
         const { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } = await import(${JSON.stringify(hostIndex)});
@@ -414,17 +425,13 @@ test("packed pstack loads and routes workflows with or without delegation", asyn
         const { session } = await createAgentSession({ cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR,
           settingsManager, resourceLoader: loader, sessionManager: SessionManager.inMemory() });
         try {
-          const cases = [
-            ["create-formal-verification-skill", "TLA+ is the default"],
-            ["maintain-formal-verification-skill", "Do not move the sync commit for a blocked check"],
-            ["sharpen", "Then rewrite my prompt", "prototype any choice an experiment can settle"],
-          ];
-          for (const [name, ...markers] of cases) {
+          const cases = ${JSON.stringify(expansionCases)};
+          for (const [name, marker] of cases) {
             assert.equal(await session.followUp("/skill:" + name + " issue7-input"), "queued");
             const [expanded] = session.getFollowUpMessages();
             assert.ok(expanded.startsWith('<skill name="' + name + '" location="'));
             assert.ok(expanded.includes(${JSON.stringify(packedRoot)} + "/skills/" + name + "/SKILL.md"));
-            for (const marker of markers) assert.ok(expanded.includes(marker), name + ": " + marker);
+            assert.ok(expanded.includes(marker), name + ": " + marker);
             assert.ok(expanded.endsWith("</skill>\\n\\nissue7-input"));
             session.clearQueue();
           }
